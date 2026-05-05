@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Started:** 2026-05-04
 **Last updated:** 2026-05-05
-**Phases since last refactor:** 1
+**Phases since last refactor:** 2
 **Total refactor passes:** 0
 
 ---
@@ -13,8 +13,8 @@
 | # | Phase | Status | Completed |
 |---|-------|--------|-----------|
 | 1 | CLI scaffold, config loading, dry-run | done | 2026-05-05 |
-| 2 | Kit pipeline, base kit, `agentbox build` | active | — |
-| 3 | Container lifecycle — run / shell / exec / attach / ls / rm | pending | — |
+| 2 | Kit pipeline, base kit, `agentbox build` | done | 2026-05-05 |
+| 3 | Container lifecycle — run / shell / exec / attach / ls / rm | active | — |
 | 4 | Zellij-in-box, layout generation, `box` helpers | pending | — |
 | 5 | Runtime kits + agent kits + agent integration | pending | — |
 | 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | pending | — |
@@ -26,6 +26,30 @@
 ## Refactor Log
 
 (none yet — phases_since_refactor=1, default trigger is every 3 phases)
+
+---
+
+## Phase 2 Notes
+
+What's now possible that wasn't before:
+- `agentbox build base` actually produces a working 417MB Debian image with the
+  in-box DX bundle (zsh + starship + zellij + 12 modern CLI tools + the box helpers).
+- `agentbox build --print <kits>` emits the full Dockerfile to stdout for inspection.
+- `agentbox build --list` enumerates known kits (built-in + user; user shadows by name).
+- `agentbox build --no-cache` forces a full rebuild; `agentbox build --prune` cleans
+  unreferenced agentbox/* images.
+- The kit cache at `~/.local/share/agentbox/cache/kits/` writes both `<tag>.json`
+  and `<tag>.Dockerfile` for inspection.
+- Phase 5+'s `polyglot`, `node`, `python`, `claude`, etc., are now a content-only
+  add: drop a kit dir into `internal/builtinkits/kits/<name>/`, no Go code changes
+  required. The Runner port + Builder + Resolver handle it.
+- The domain layer stays clean: `internal/kits` and `internal/builtinkits` import
+  no cobra. PodmanRunner is the only adapter using `os/exec`.
+
+Implementation stats:
+- 1 design pass, 2 implementation orchestrations (Part A + Part B), 3 commits.
+- 49 unit tests in internal/kits; full test suite (Phase 1 + Phase 2) green.
+- Image build is ~5min cold, ~20s warm (podman layer cache); cache hit instant.
 
 ---
 
@@ -75,6 +99,34 @@ Implementation stats:
 - **Chose:** `/agentbox` (root-anchored).
 - **Alternative:** `agentbox` (would have blocked the source dir).
 - **Reasoning:** Convention for Go binaries — only the root-level binary should be ignored, not anything else with the same name. Agent 2 caught this and fixed it before committing.
+
+### Phase 2: Built-in kits live at `internal/builtinkits/kits/`, not project root
+- **Context:** Original brief recommended `kits/` at project root. Go's `//go:embed` forbids `..` and `/`-prefixed patterns — kits two levels above the embedder can't be embedded.
+- **Chose:** `internal/builtinkits/kits/<name>/` — embedder + content live together.
+- **Alternative:** Place a `package <name>` Go file at project root just for embedding (unusual layout) or rebuild the binary with separate kit shipping (against VISION's "single static binary").
+- **Reasoning:** Go's embed restriction is structural; the design honors it cleanly with no functional cost.
+
+### Phase 2: SPEC's `[runtime.containers]` was renamed to `[containers]` in Phase 1; Phase 2's design re-confirmed this
+- See Phase 1 deviation log entry; Phase 2 cache JSON, build flags, and runspec all assume the renamed shape.
+
+### Phase 2: `git-delta` moved from packages.txt to install.sh
+- **Context:** Design listed `git-delta` in `packages.txt`, but it's not in Debian Bookworm's apt repos.
+- **Chose:** Install via GitHub releases (dandavison/delta v0.19.2) inside install.sh, with `git config --system core.pager` wired to it.
+- **Reasoning:** Debian's late inclusion of `delta`. Apt-only would silently drop the tool.
+
+### Phase 2: `box info` env-var contract — read AGENTBOX_* env vars, fall back to "n/a"
+- **Context:** The Phase 2 ROADMAP test checkpoint runs `podman run --rm $TAG box info` directly (no agentbox wrapper, no labels visible). Earlier alternative was to read container labels via `/run/.containerenv`, but podman doesn't expose user-defined labels there.
+- **Chose:** `box info` reads `AGENTBOX_PROJECT_ID`, `AGENTBOX_PROJECT`, etc. — Phase 3 will set these via `podman create -e <NAME>=<value>` at container create time.
+- **Alternative:** Custom labels file at a known path inside the container (e.g., `/etc/agentbox/labels`).
+- **Reasoning:** Env vars compose with Phase 1's secrets-by-name pattern (just `-e <NAME>=<value>` instead of `-e <NAME>`); no extra mount needed; simpler to debug.
+
+### Phase 2: Pinned in-box tool versions (Part B install.sh)
+- All versions verified against current GitHub releases at write time:
+  zellij 0.44.1 / starship 1.25.1 / eza 0.23.4 / dust 1.2.4 /
+  duf 0.9.1 / bottom 0.12.3 / procs 0.14.11 / hyperfine 1.20.0 /
+  watchexec 2.5.1 / yq 4.53.2 / zoxide 0.9.9 / git-delta 0.19.2 /
+  httpie 3.2.4 (pip) / tldr (pip, unpinned)
+- The implementer should bump these as upstream releases stabilize. Build is reproducible against any pin that's still resolvable on GitHub.
 
 ---
 
