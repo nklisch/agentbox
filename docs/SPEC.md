@@ -266,13 +266,21 @@ case (development inside the box) but worth knowing.
 | `open`      | Default bridge network. No filtering.                                |
 
 **Sudo requirement:** `safe` mode with `block_direct_ip = true` (the default) and `allowlist`
-mode both require passwordless `sudo` for `iptables` and `ipset` on Linux. Configure via:
+mode both require passwordless `sudo` for `iptables`, `ipset`, and `agentbox-netfilter` on
+Linux. Binary paths vary by distro (Debian/Ubuntu: `/usr/sbin/`; Fedora-family: `/usr/bin/`).
+`agentbox doctor` resolves them for the current system and prints a copy-pasteable sudoers
+line; example entries:
 
 ```
-ALL ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset
+# Fedora / RHEL / Nobara:
+%wheel ALL=(root) NOPASSWD: /usr/bin/iptables, /usr/bin/ipset, /home/<you>/.local/bin/agentbox-netfilter
+
+# Debian / Ubuntu:
+%sudo  ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/local/bin/agentbox-netfilter
 ```
 
-or equivalent via `visudo`. `agentbox doctor` verifies this with the `sudo-iptables` check.
+Install via `/etc/sudoers.d/agentbox` (mode `0440`, root:root) and validate with
+`sudo visudo -c`. `agentbox doctor` verifies this with the `sudo-iptables` check.
 
 `safe` is the **default and recommended mode** — broad internet access with a threat-intel
 DNS upstream and direct-IP egress blocked. Catches known-malicious destinations without the

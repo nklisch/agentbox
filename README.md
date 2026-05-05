@@ -86,15 +86,27 @@ it's stopped.
 ### 4. (Linux, optional) Configure passwordless sudo for `safe`/`allowlist`
 
 These modes need `iptables` + `ipset` + `agentbox-netfilter` to run as root.
-Add a sudoers entry via `visudo`:
+The right paths vary by distro — `agentbox doctor` resolves them for your
+system and prints a copy-pasteable sudoers line:
+
+```sh
+agentbox doctor      # look for the [WARN] sudo-iptables line
+```
+
+A typical Fedora-family entry:
 
 ```
-%wheel ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/local/bin/agentbox-netfilter
+%wheel ALL=(root) NOPASSWD: /usr/bin/iptables, /usr/bin/ipset, /home/<you>/.local/bin/agentbox-netfilter
 ```
 
-Adjust the user/group and the binary path (`~/.local/bin/agentbox-netfilter`
-vs `/usr/local/bin/agentbox-netfilter`) to match your install. `agentbox
-doctor` checks this and tells you exactly what's missing.
+A typical Debian/Ubuntu entry:
+
+```
+%sudo ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/local/bin/agentbox-netfilter
+```
+
+Drop your line into `/etc/sudoers.d/agentbox` (mode `0440`, owner `root`)
+and validate with `sudo visudo -c` before relying on it.
 
 If you skip this step, run with `--network open` (less safe, no setup
 required) or `--network off` (no network at all).

@@ -157,14 +157,32 @@ func sudoCheck() Check {
 	}
 
 	// Check whether iptables is on PATH first; sudo check is moot without it.
-	if _, err := exec.LookPath("iptables"); err != nil {
+	iptablesPath, err := exec.LookPath("iptables")
+	if err != nil {
 		return Check{Name: name, Status: StatusFail,
 			Message: "iptables not found; install iptables before configuring sudo"}
+	}
+	// ipset path may differ from iptables (e.g. /usr/bin/ipset on Fedora,
+	// /usr/sbin/ipset on Debian). Resolve it independently so the suggested
+	// sudoers entry is correct for the user's distro.
+	ipsetPath, _ := exec.LookPath("ipset")
+	if ipsetPath == "" {
+		ipsetPath = "/usr/sbin/ipset" // sane default for the suggestion
+	}
+	// agentbox-netfilter is also gated by sudo. Fall back to install-prefix
+	// guess if it isn't on PATH (the user may not have ~/.local/bin in PATH yet).
+	netfilterPath, err := exec.LookPath("agentbox-netfilter")
+	if err != nil {
+		if home, _ := os.UserHomeDir(); home != "" {
+			netfilterPath = home + "/.local/bin/agentbox-netfilter"
+		} else {
+			netfilterPath = "/usr/local/bin/agentbox-netfilter"
+		}
 	}
 
 	// `sudo -n iptables -L` exits 0 when passwordless sudo is configured, non-zero otherwise.
 	// Use -n (non-interactive) so it never blocks waiting for a password.
-	cmd := exec.Command("sudo", "-n", "iptables", "-L")
+	cmd := exec.Command("sudo", "-n", iptablesPath, "-L")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -173,8 +191,10 @@ func sudoCheck() Check {
 		}
 		return Check{Name: name, Status: StatusWarn,
 			Message: fmt.Sprintf("passwordless sudo for iptables not configured: %s — "+
-				"add 'ALL ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset' to sudoers "+
-				"(or use visudo). Required for safe mode with block_direct_ip=true and allowlist mode.", msg)}
+				"add this line via visudo (or in /etc/sudoers.d/agentbox): "+
+				"%%wheel ALL=(root) NOPASSWD: %s, %s, %s. "+
+				"Required for safe mode with block_direct_ip=true and allowlist mode.",
+				msg, iptablesPath, ipsetPath, netfilterPath)}
 	}
 	return Check{Name: name, Status: StatusOK, Message: "passwordless sudo for iptables confirmed"}
 }

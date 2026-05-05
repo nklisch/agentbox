@@ -289,10 +289,15 @@ the system. `--fix` is the first-run equivalent of `agentbox init` — no separa
 command exists.
 
 **sudo requirement:** `safe` and `allowlist` modes need passwordless sudo for `iptables`,
-`ipset`, and `agentbox-netfilter`. Suggested sudoers entry:
+`ipset`, and `agentbox-netfilter`. Binary paths vary by distro — `agentbox doctor` prints
+a copy-pasteable line for the current system. Examples:
 
 ```
-ALL ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/local/bin/agentbox-netfilter
+# Fedora / RHEL / Nobara:
+%wheel ALL=(root) NOPASSWD: /usr/bin/iptables, /usr/bin/ipset, /home/<you>/.local/bin/agentbox-netfilter
+
+# Debian / Ubuntu:
+%sudo  ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/local/bin/agentbox-netfilter
 ```
 
 **Flags:**
