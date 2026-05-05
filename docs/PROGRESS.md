@@ -669,6 +669,33 @@ Implementation stats:
    darwin/arm64. The legacy `make install` flow is preserved for development.
    Homebrew tap and code signing remain deferred.
 
+### Layout system + agent-activity trail (v0.3.0, 2026-05-05)
+
+8. **Named layout system + auditor trail shipped as v0.3.0.** The original zellij
+   integration (Phase 4) had a single hard-coded layout. v0.3.0 evolved it into a named
+   system with three built-ins and custom KDL support.
+
+   **In scope (shipped):**
+   - `agentbox run --layout <name>` flag; `[zellij] layout = "..."` config key.
+   - Three built-in layouts: `focus` (the renamed original), `reviewer` (agent + live delta
+     diff + watchexec test runner), `auditor` (agent + live Claude Code tool-call trail).
+   - Custom layouts at `~/.config/agentbox/layouts/<name>.kdl` with Go `text/template`
+     substitution (`{{.ProjectAbs}}`, `{{.Shell}}`, `{{.AgentCommand}}`, `{{.AgentArgs}}`,
+     `{{.AgentCmdFull}}`, `{{.TrailFile}}`).
+   - Agent-activity trail (auditor + claude only): shadow `claude-settings.json` merge
+     (`MergeTrailHooks` in `internal/lifecycle/trail.go`), bind-mount-on-bind-mount settings
+     shadowing (host `settings.json` never written), JSONL trail at `<state>/trail.jsonl`
+     mounted at `/etc/agentbox/trail.jsonl`, `BOX_TRAIL_FILE` env var.
+   - Four new base-kit helpers: `box-diff-watch`, `box-tests-watch`, `box-trail`,
+     `agentbox-hook-record`.
+   - Commits: `fef4c09`, `ae17958`, `824f488`. Tagged v0.3.0.
+
+   **Deferred to v2+:**
+   - Codex and opencode trail adapters (different observability surfaces; not confirmed at
+     write time).
+   - `dashboard` layout (more panes, wider terminal assumed).
+   - Mid-session layout switching without `--fresh`.
+
 ### Phase 1: SPEC.md `[runtime.containers]` is invalid TOML
 - **Expected:** SPEC.md shows `runtime = "podman"` (top-level key) alongside `[runtime.containers]` (sub-table). TOML forbids a key from being both a value and a table-parent.
 - **Actual:** Renamed `[runtime.containers]` → `[containers]` in the config schema. Top-level `runtime = "podman"` is unchanged.

@@ -87,15 +87,29 @@ agentbox run [agent] [flags]
 box is up, then `podman exec`s into it and runs `zellij attach -c agentbox` with a
 generated layout that auto-launches the agent.
 
+**Layout-driven mounts and env:** selecting `--layout auditor` with `agent = claude` adds
+two extra mounts and one env var to the container beyond the standard runtime spec:
+
+| Addition | What it does |
+| -------- | ------------ |
+| `-v <state>/trail.jsonl:/etc/agentbox/trail.jsonl:rw` | JSONL event stream for hook output. |
+| `-v <state>/claude-settings.json:/root/.claude/settings.json:ro` | Shadow settings with agentbox trail hooks merged in. Layered on top of the `~/.claude` dir mount; host file untouched. |
+| `-e BOX_TRAIL_FILE=/etc/agentbox/trail.jsonl` | Tells `box-trail` where to tail. |
+
+See [docs/LAYOUTS.md](LAYOUTS.md) for the full layout reference and [docs/TRAIL.md](TRAIL.md)
+for the JSONL event schema and hook wiring details.
+
 **Examples:**
 
 ```sh
-agentbox run                       # default agent in $PWD
-agentbox run codex                 # specific agent
-agentbox run --fresh               # nuke and recreate
+agentbox run                           # default agent in $PWD
+agentbox run codex                     # specific agent
+agentbox run --fresh                   # nuke and recreate
 agentbox run --kits polyglot,cloud,claude
-agentbox run --network off         # no network for this run
-agentbox run --no-attach           # spin up, don't attach
+agentbox run --network off             # no network for this run
+agentbox run --no-attach               # spin up, don't attach
+agentbox run --layout reviewer         # live diff + test runner panes
+agentbox run --layout auditor          # live Claude tool-call trail pane
 ```
 
 ### `agentbox shell`

@@ -131,6 +131,8 @@ absolute paths in tooling output all match the host.
 | Shell history             | rw   | session state `history` file  | `/root/.local/share/agentbox-history` | Persists across box recreation. |
 | Layout                    | ro   | session state `layout.kdl`    | `/etc/agentbox/layout.kdl`   | Generated per session.               |
 | Effective config          | ro   | session state `effective-config.toml` | `/etc/agentbox/config.toml` | For in-box `box info`.       |
+| Trail file                | rw   | `<state>/trail.jsonl`         | `/etc/agentbox/trail.jsonl`  | Auditor layout + claude agent only. JSONL stream populated by Claude hooks. See docs/TRAIL.md. |
+| Claude settings shadow    | ro   | `<state>/claude-settings.json` | `/root/.claude/settings.json` | Auditor layout + claude agent only. Session-merged settings file (user's host settings + agentbox trail hooks). Bind-mounted on top of the existing `~/.claude` dir mount; the host's actual `settings.json` is never written. |
 
 `mounts.extra` accepts arbitrary entries in `<src>:<dst>:<mode>` form. No interpolation
 beyond `~`.
@@ -266,6 +268,23 @@ without. The agent can spawn arbitrary containers (subject to the network policy
 fuse filesystems, and use a fuller set of namespacing syscalls. Acceptable for the use
 case (development inside the box) but worth knowing.
 
+### Conditional flags (auditor layout + claude agent)
+
+When `layout = auditor` and `agent = claude`, the CLI also appends:
+
+```
+-v "${STATE_DIR}/trail.jsonl:/etc/agentbox/trail.jsonl:rw"          # JSONL event stream
+-v "${STATE_DIR}/claude-settings.json:/root/.claude/settings.json:ro" # shadow settings mount
+-e BOX_TRAIL_FILE=/etc/agentbox/trail.jsonl                          # tells box-trail where to tail
+```
+
+The shadow settings mount comes **after** the `~/.claude:/root/.claude:rw` directory mount so
+the file-level bind layers on top of the directory mount correctly — the host's
+`~/.claude/settings.json` is never written.
+
+See docs/TRAIL.md for the full hook wiring, JSONL event schema, and shadow settings merge
+algorithm.
+
 ## Label schema
 
 | Label                    | Purpose                                       |
@@ -338,6 +357,7 @@ sufficiently determined agent from misbehaving via legitimate channels.
 ~/.config/agentbox/
   config.toml                  # global config
   kits/                        # user-authored kits
+  layouts/                     # custom KDL layouts (selected with --layout <name>)
 
 ~/.local/share/agentbox/
   sessions/
@@ -346,6 +366,8 @@ sufficiently determined agent from misbehaving via legitimate channels.
       effective-config.toml    # resolved config used at create time
       history                  # persistent shell history (mounted rw into box)
       saved/                   # files snapshotted out by `box save`
+      trail.jsonl              # agent-activity JSONL trail (auditor + claude only; mounted rw)
+      claude-settings.json     # shadow settings file (auditor + claude only; mounted ro)
       events.jsonl             # future: docker events + DNS log
   cache/
     kits/

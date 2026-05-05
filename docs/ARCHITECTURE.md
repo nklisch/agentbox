@@ -72,6 +72,93 @@ Three things to internalize:
 3. **Zellij lives inside the box.** `agentbox run` is essentially "podman exec + zellij
    attach". The host doesn't need zellij installed.
 
+## Layout subsystem
+
+Every `agentbox run` resolves a named layout, renders a KDL file into the session state dir,
+and mounts it read-only into the box. Zellij loads it on attach.
+
+**Resolution order:** `--layout` flag → `[zellij].layout` in project config → `[zellij].layout`
+in global config → `"focus"` (built-in default).
+
+**Built-in layouts** are embedded in the binary under `internal/zellij/`:
+
+| Layout | Purpose |
+| ------ | ------- |
+| `focus` | Agent (70%) + git ticker + btm stats + shell tab. The original layout. |
+| `reviewer` | Agent (50%) + delta diff dashboard + watchexec test runner + shell tab. |
+| `auditor` | Agent (60%) + live Claude Code tool-call trail (40%) + shell tab. |
+
+**Custom layouts** live at `~/.config/agentbox/layouts/<name>.kdl`. agentbox performs Go
+`text/template` substitution before writing the rendered file, injecting:
+
+```
+{{.ProjectAbs}}    absolute project path (for cwd = in panes)
+{{.Shell}}         configured shell name
+{{.AgentCommand}}  first element of agent cmd
+{{.AgentArgs}}     remaining args, KDL-quoted
+{{.AgentCmdFull}}  ready-to-paste KDL command + args block
+{{.TrailFile}}     in-container trail path (empty unless auditor + claude)
+```
+
+**Plumbing:** `RunOpts.Layout` (from flag or config) → `LayoutSpec` (resolved name + source
+path if custom) → `writeLayoutFor` (template substitution for custom; built-in expansion for
+built-ins) → `<state>/layout.kdl` (written to session dir) → mounted ro at
+`/etc/agentbox/layout.kdl` → `zellij --layout /etc/agentbox/layout.kdl attach -c agentbox`.
+
+Unknown layout names fail at run time with exit code 2.
+
+See docs/LAYOUTS.md for the full layout reference and custom layout guide.
+
+## Agent-activity trail
+
+The trail is a JSONL event stream that captures every Claude Code tool call in real time.
+It is active only when **both** `layout = auditor` and `agent = claude` are true.
+
+### 1. Hook setup (shadow settings merge)
+
+Before container creation, lifecycle calls `WriteShadowSettings` (`internal/lifecycle/trail.go`):
+
+1. Reads the user's host `~/.claude/settings.json` (if present).
+2. Calls `MergeTrailHooks` to append agentbox's hook group to each of the five hook events
+   (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `StopFailure`). User hooks are
+   preserved; agentbox only appends.
+3. Writes the merged JSON to `<state>/claude-settings.json` (mode 0600).
+
+The merged file is bind-mounted **read-only** at `/root/.claude/settings.json` inside the
+box, layered on top of the `~/.claude:/root/.claude` directory mount. The host's actual
+`~/.claude/settings.json` is bit-identical before and after the run.
+
+### 2. Trail file lifecycle
+
+```
+host:      <state>/trail.jsonl     ←  touched empty at box-create time
+             (bind-mounted rw)
+in-box:    /etc/agentbox/trail.jsonl
+env:       BOX_TRAIL_FILE=/etc/agentbox/trail.jsonl
+```
+
+`agentbox-hook-record` (the Claude hook command) reads stdin, adds `trail_ts`, and
+O_APPEND-writes a JSONL line to `$BOX_TRAIL_FILE`. Writes under 4KB are atomic on Linux.
+
+### 3. Rendering pipeline
+
+```
+Claude Code → fires hook → agentbox-hook-record (appends JSONL)
+                                     ↓
+                          trail.jsonl (in-container)
+                                     ↓
+                          box-trail (tail -F + jq + ANSI color)
+                                     ↓
+                          auditor layout trail pane
+```
+
+`box-trail` tails the file and renders one color-coded line per event: cyan for
+`PostToolUse`, red for `PostToolUseFailure`, magenta for `Stop`, dim for `PreToolUse`.
+
+See docs/TRAIL.md for the JSONL event schema, schema drift notes (Claude 2.1.128 Stop events
+use `last_assistant_message`, not `reason`; tool result field is `tool_response`), and the
+guide for adding new agent adapters in v2.
+
 ## `agentbox run` lifecycle
 
 The flow, step by step:
@@ -111,7 +198,12 @@ agentbox run [agent] [--fresh]
 │ 5a. Doesn't exist: ensure kit image, create container        │
 │     - resolve kit list → kit_image_tag (hash of list)        │
 │     - if image missing: agentbox build <kit_list>            │
+│     - resolve layout: --layout flag → config → "focus"       │
+│       built-in: expand from internal/zellij/                 │
+│       custom: read ~/.config/agentbox/layouts/<name>.kdl,    │
+│               apply text/template substitution               │
 │     - render layout.kdl + effective-config.toml              │
+│     - if auditor + claude: write shadow settings, touch trail │
 │     - podman create with full runtime spec (see SPEC.md)     │
 │     - podman start                                           │
 │                                                              │
@@ -436,10 +528,13 @@ PID 1: sleep infinity                       (the container's main process)
        ├─ podman exec -it ... zellij attach (one per attach)
        │     │
        │     └─ zellij server (in-box)
-       │           ├─ agent pane: claude / codex / ...
-       │           ├─ git pane:   watch -n 2 git status -s
-       │           ├─ stats pane: btm
-       │           └─ shell tab:  zsh
+       │           ├─ agent pane:  claude / codex / ...  (all layouts)
+       │           │   (focus)  ├─ git pane:   box-git-watch
+       │           │            └─ stats pane: btm
+       │           │   (reviewer)├─ diff pane:  box-diff-watch
+       │           │            └─ tests pane: box-tests-watch
+       │           │   (auditor)└─ trail pane: box-trail
+       │           └─ shell tab:  zsh  (all layouts)
        │
        ├─ podman exec ... <one-off>          (agentbox exec ...)
        └─ ...

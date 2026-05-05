@@ -171,6 +171,10 @@ You'll land in a zellij session inside the container with:
   so you can see the current mode and keybinds at all times. Press `Ctrl+p`
   for pane mode, `Ctrl+t` for tab mode, `Ctrl+o` for session mode, etc.
 
+This is the `focus` layout (default). Try `--layout reviewer` for a live diff +
+test runner alongside the agent, or `--layout auditor` for a real-time trail of
+every tool call Claude makes. See [## Layouts](#layouts) below.
+
 Detach with `Ctrl+o d` — that's `Ctrl+o` to enter session mode, then `d` for
 detach. The container keeps running, your zellij session keeps its layout
 and scrollback, and you can reattach later:
@@ -400,26 +404,29 @@ Read in this order:
 4. [docs/CLI.md](docs/CLI.md) — command surface, flags, identifier resolution.
 5. [docs/KITS.md](docs/KITS.md) — kit format and composition (read this
    before authoring a custom kit).
-6. [docs/ROADMAP.md](docs/ROADMAP.md) — phase order and per-phase test
+6. [docs/LAYOUTS.md](docs/LAYOUTS.md) — named layout system (focus/reviewer/auditor + custom KDL).
+7. [docs/TRAIL.md](docs/TRAIL.md) — agent-activity trail (hook wiring, JSONL schema, auditor layout).
+8. [docs/ROADMAP.md](docs/ROADMAP.md) — phase order and per-phase test
    checkpoints. [docs/PROGRESS.md](docs/PROGRESS.md) is the build journal.
 
 ---
 
 ## Status
 
-**v0.1.0** — first cut. All eight roadmap phases shipped. Linux is the
-primary platform; macOS via `podman machine` is supported (smoke-tested on
-Apple Silicon). Docker works as a fallback runtime via `--runtime docker`.
+**v0.3.0** (2026-05-05) — named layout system + agent-activity trail. Three built-in
+layouts (`focus`, `reviewer`, `auditor`), custom KDL layout support, and a real-time
+Claude Code tool-call trail for the `auditor` layout. Linux is the primary platform;
+macOS via `podman machine` is supported. Docker works as a fallback runtime via
+`--runtime docker`.
 
-Known gaps and v0.2+ work are listed in [docs/PROGRESS.md § Known
-issues](docs/PROGRESS.md#known-issues--deferred-to-v02). Notable ones:
+Known gaps are tracked in [docs/PROGRESS.md](docs/PROGRESS.md). Notable open items:
 
 - Inner `docker run -p 8080:8080` only binds inside the box. Workaround:
   `agentbox exec . curl localhost:8080` from the host.
 - Each box's `containers` kit has its own podman image cache. No shared
   registry yet.
-- Kit images are built locally on first run, not pulled. v0.3+ may add a
-  registry distribution.
+- Kit images are built locally on first run, not pulled.
+- Trail support is Claude-only in v1. Codex and opencode adapters are deferred.
 
 ---
 

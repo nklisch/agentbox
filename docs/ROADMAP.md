@@ -145,6 +145,12 @@ agentbox attach .                         # reattaches the same zellij session
 agentbox rm .
 ```
 
+> **Post-v0.1 work (v0.3.0):** the single layout produced here evolved into a named layout
+> system. `agentbox run --layout <name>` selects from three built-ins (`focus`, `reviewer`,
+> `auditor`) or a custom KDL file at `~/.config/agentbox/layouts/<name>.kdl`. The `auditor`
+> layout adds a live Claude Code tool-call trail pane via a shadow `settings.json` mount and
+> JSONL hooks. See docs/LAYOUTS.md and docs/TRAIL.md for the full reference.
+
 ---
 
 ## Phase 5: Runtime kits + agent kits + agent integration  *(parallel with P6, P7)*

@@ -262,6 +262,29 @@ If the kit is in your kit list but `enable = false`, you'll get podman installed
 operations will fail with mount/permission errors. `agentbox doctor` warns when these two
 are out of sync.
 
+## Helpers shipped by the base kit
+
+The `base` kit installs a family of small scripts at `/usr/local/bin/`. They're on `PATH`
+inside every box and designed to be discoverable when you `agentbox shell` in.
+
+| Helper | Description | Since |
+| ------ | ----------- | ----- |
+| `box` | Dispatcher — bare `box` runs `box help`. | v0.1 |
+| `box-help` | List all `box` subcommands with one-line descriptions. | v0.1 |
+| `box-info` | Print project_id, agent, kits, mounts, network mode, resource limits. | v0.1 |
+| `box-net` | Show current network policy + recent DNS queries (safe/allowlist modes). | v0.1 |
+| `box-save` | Copy a file from the box to host state dir so it survives `agentbox rm`. | v0.1 |
+| `box-scratch` | `cd` into a tmpfs scratch dir at `/tmp/box-scratch` for ephemeral work. | v0.1 |
+| `box-agent` | Agent wrapper that drops the pane into `zsh -l` when the agent exits. | v0.2.5 |
+| `box-git-watch` | Git status dashboard used in the `focus` layout's git pane. | v0.2.5 |
+| `box-diff-watch` | Delta-rendered diff of HEAD vs base branch; used in the `reviewer` layout's diff pane. | v0.3.0 |
+| `box-tests-watch` | Project-aware test runner via watchexec; used in the `reviewer` layout's tests pane. | v0.3.0 |
+| `box-trail` | Color-coded JSONL trail renderer; used in the `auditor` layout's trail pane. | v0.3.0 |
+| `agentbox-hook-record` | Claude Code hook command that writes events to the trail file (`$BOX_TRAIL_FILE`). | v0.3.0 |
+
+The `box-diff-watch`, `box-tests-watch`, `box-trail`, and `agentbox-hook-record` helpers are
+wired into the v0.3.0 layout system. See docs/LAYOUTS.md and docs/TRAIL.md for details.
+
 ## Authoring a custom kit
 
 1. Create the directory:

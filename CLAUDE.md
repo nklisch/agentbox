@@ -14,7 +14,9 @@ Read in this order before changing anything:
 3. `docs/ARCHITECTURE.md` — how pieces fit (lifecycle, kit pipeline, network topology)
 4. `docs/CLI.md` — command surface, flags, identifier resolution
 5. `docs/KITS.md` — kit format and composition
-6. `docs/ROADMAP.md` — phase order and per-phase test checkpoints
+6. `docs/LAYOUTS.md` — named layout system (focus/reviewer/auditor + custom KDL)
+7. `docs/TRAIL.md` — agent-activity trail (hook wiring, JSONL schema, auditor layout)
+8. `docs/ROADMAP.md` — phase order and per-phase test checkpoints
 
 `docs/PROGRESS.md` (if present) tracks autopilot state — read it when resuming.
 
@@ -52,3 +54,4 @@ These move fast — verify against current sources, don't guess from memory:
 - Zellij KDL layout schema
 - Agent CLIs and their YOLO/permission flags (Claude Code, Codex, opencode)
 - `@anthropic-ai/claude-code`, `@openai/codex` package names and install paths
+- Claude Code hook event schemas (`settings.json` hook format, payload field names — `tool_response` not `tool_result`; Stop events have `last_assistant_message` not `reason`). Load-bearing for the trail system.
