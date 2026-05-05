@@ -1,0 +1,4 @@
+name        = "python"
+description = "Python with uv (project + tool runner), ruff, pyenv"
+depends_on  = ["base"]
+provides    = ["python"]   # documentation only — resolver ignores

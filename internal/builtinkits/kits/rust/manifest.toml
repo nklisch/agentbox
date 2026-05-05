@@ -1,0 +1,4 @@
+name        = "rust"
+description = "rustup with stable + nightly toolchains, cargo-watch, sccache"
+depends_on  = ["base"]
+provides    = ["rust"]   # documentation only — resolver ignores

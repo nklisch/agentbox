@@ -1,0 +1,4 @@
+name        = "cloud"
+description = "AWS, GCP, Azure CLIs + Terraform + kubectl + Helm"
+depends_on  = ["base"]
+provides    = ["cloud"]   # documentation only — resolver ignores

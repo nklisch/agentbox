@@ -1,0 +1,9 @@
+clang
+lld
+lldb
+cmake
+ninja-build
+gdb
+valgrind
+pkg-config
+build-essential

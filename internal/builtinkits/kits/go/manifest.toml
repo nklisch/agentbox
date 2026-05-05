@@ -1,0 +1,4 @@
+name        = "go"
+description = "Go toolchain + gopls + golangci-lint + delve"
+depends_on  = ["base"]
+provides    = ["go"]   # documentation only — resolver ignores

@@ -1,0 +1,4 @@
+ca-certificates
+build-essential
+pkg-config
+libssl-dev

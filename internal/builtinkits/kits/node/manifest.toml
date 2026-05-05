@@ -1,0 +1,4 @@
+name        = "node"
+description = "Node LTS + current, with pnpm, yarn (corepack), bun, deno"
+depends_on  = ["base"]
+provides    = ["node"]   # documentation only — resolver ignores

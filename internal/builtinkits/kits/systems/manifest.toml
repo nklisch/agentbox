@@ -1,0 +1,4 @@
+name        = "systems"
+description = "C/C++ toolchain: clang, lld, cmake, ninja, gdb, lldb, valgrind"
+depends_on  = ["base"]
+provides    = ["systems"]   # documentation only — resolver ignores
