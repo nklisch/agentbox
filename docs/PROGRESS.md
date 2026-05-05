@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Started:** 2026-05-04
 **Last updated:** 2026-05-05
-**Phases since last refactor:** 2
+**Phases since last refactor:** 3
 **Total refactor passes:** 0
 
 ---
@@ -14,8 +14,8 @@
 |---|-------|--------|-----------|
 | 1 | CLI scaffold, config loading, dry-run | done | 2026-05-05 |
 | 2 | Kit pipeline, base kit, `agentbox build` | done | 2026-05-05 |
-| 3 | Container lifecycle — run / shell / exec / attach / ls / rm | active | — |
-| 4 | Zellij-in-box, layout generation, `box` helpers | pending | — |
+| 3 | Container lifecycle — run / shell / exec / attach / ls / rm | done | 2026-05-05 |
+| 4 | Zellij-in-box, layout generation, `box` helpers | active | — |
 | 5 | Runtime kits + agent kits + agent integration | pending | — |
 | 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | pending | — |
 | 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | pending | — |
@@ -26,6 +26,35 @@
 ## Refactor Log
 
 (none yet — phases_since_refactor=1, default trigger is every 3 phases)
+
+---
+
+## Phase 3 Notes
+
+What's now possible that wasn't before:
+- `agentbox run` actually creates a working container, drops you into zsh.
+- `agentbox shell`, `agentbox exec`, `agentbox attach`, `agentbox ls`, `agentbox rm`
+  are all real — five Phase 1 stubs replaced with full implementations.
+- `agentbox ls --json` gives NDJSON pipeable into `jq`.
+- Identifier resolution accepts `.`, `<id-prefix>`, full `<id>`, or `agentbox-<id>`.
+  Ambiguous prefixes return a helpful list of matches.
+- The kit image is built on demand by `EnsureBox` (cache hit makes it instant
+  after first build). Phase 2's Builder gets exercised for real.
+- Mount-source-missing failures map to exit 7 with a useful message.
+
+Implementation stats:
+- 1 design pass, 1 implementation orchestration (single Sonnet agent, 18 files).
+- Plus 1 hot-fix commit (TTY detection for attach when stdin is /dev/null).
+- 2 new domain packages: `internal/container` (Runtime port + PodmanRuntime),
+  `internal/lifecycle` (orchestrator + ResolveID).
+- `internal/cli/stub.go` deleted entirely — no commands stubbed anymore.
+- Total commits: design (`c3d9b37`), implementation (`bbab4cf`), TTY fix (`90157a5`).
+
+Known gaps closing naturally in later phases:
+- ROADMAP Phase 3 checkpoint requires `.agentbox.toml` override of agent kits
+  to `["base"]`. Phase 5 ships polyglot/claude/etc.; this gap closes then.
+- Network mode safe/allowlist degrades to open with stderr warning. Phase 6
+  ships CoreDNS+iptables; warning goes away.
 
 ---
 
@@ -120,6 +149,30 @@ Implementation stats:
 - **Alternative:** Custom labels file at a known path inside the container (e.g., `/etc/agentbox/labels`).
 - **Reasoning:** Env vars compose with Phase 1's secrets-by-name pattern (just `-e <NAME>=<value>` instead of `-e <NAME>`); no extra mount needed; simpler to debug.
 
+### Phase 3: Network mode degradation, not Fail Fast
+- **Context:** Default config has `network.mode = "safe"`, but Phase 6 hasn't shipped CoreDNS+iptables. The original design had `guardNetworkMode` exit 6 on safe/allowlist; that would break the ROADMAP test checkpoint (which runs plain `agentbox run --no-attach`).
+- **Chose:** `degradeNetworkMode` prints a stderr warning and falls back to `"open"`.
+- **Alternative:** Default config change to mode="open" (would change SPEC user-facing default), or require flag override on every run.
+- **Reasoning:** Defaults still work end-to-end during the gap between phases. Phase 6 replaces the warning with real safe mode without touching the runtime spec or the default config.
+
+### Phase 3: TTY detection via golang.org/x/term, not stdlib `os.ModeCharDevice`
+- **Context:** First implementation of `attach` hung when stdin was `/dev/null` (test/script invocations). `os.ModeCharDevice` is true for /dev/null too, so the stdlib-only check incorrectly identified /dev/null as a TTY and allocated a pty.
+- **Chose:** Add `golang.org/x/term` (small, Go-team-maintained module). `term.IsTerminal(int(f.Fd()))` correctly distinguishes via TIOCGWINSZ ioctl.
+- **Alternative:** Reimplement TIOCGWINSZ via raw syscall (fragile, OS-specific).
+- **Reasoning:** Standard, tiny, canonical. Bumped go.mod's `go` directive from 1.23 → 1.25.0 (x/term v0.42.0's minimum). Still well within "latest stable".
+
+### Phase 3: `attach` short-circuits to liveness check when stdin is not a TTY
+- **Context:** `agentbox attach` semantics are "drop into a shell"; with no TTY, dropping into an interactive zsh against /dev/null hangs even with `-i` only (podman exec keeps the stream open).
+- **Chose:** When `!isTerminal(os.Stdin)`, print `<project_id> (running)` and exit 0.
+- **Alternative:** Run `[zsh, -c, exit]` (works but is surprising — user might expect their stdin to feed into zsh).
+- **Reasoning:** Phase 4 replaces this whole path with zellij. The non-TTY path is for scripted use ("is this box up?") where the liveness signal is enough. Real interactive use is unaffected.
+
+### Phase 3: Default agent kits don't exist until Phase 5 — known gap
+- **Context:** `cfg.Agents["claude"].Kits = ["polyglot", "claude"]` per SPEC defaults, but only `base` exists in builtinkits/. Calling `agentbox run` in a fresh dir without override fails at kit resolution.
+- **Chose:** Document; require `.agentbox.toml` overriding `[agents.claude] kits = ["base"]` for Phase 3 testing. The ROADMAP Phase 3 checkpoint script needs this override.
+- **Alternative (deferred):** Fall back to base if requested kits missing, with a warning. Or change default kits temporarily.
+- **Reasoning:** Phase 5 ships polyglot/claude/etc.; this gap closes naturally then. Logged as a "Suggested addition" under Phase 5 rather than carrying a temporary fallback.
+
 ### Phase 2: Pinned in-box tool versions (Part B install.sh)
 - All versions verified against current GitHub releases at write time:
   zellij 0.44.1 / starship 1.25.1 / eza 0.23.4 / dust 1.2.4 /
@@ -142,6 +195,8 @@ Implementation stats:
 ## Suggested Additions
 
 - Update SPEC.md to reflect `[containers]` rename (deviation from Phase 1 design).
+- After Phase 5, ROADMAP Phase 3 test checkpoint should work without an `.agentbox.toml` override (polyglot/claude kits will exist).
+- After Phase 6, the network-mode degradation in `Lifecycle.degradeNetworkMode` should be replaced with real safe/allowlist plumbing. The warning string + fallback are temporary scaffolding.
 
 ---
 
