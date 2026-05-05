@@ -167,9 +167,13 @@ You'll land in a zellij session inside the container with:
 - **Bottom panes:** a git status ticker and `btm` (system stats).
 - **Shell tab:** a plain `zsh` for poking around. Try `box info`, `box net`,
   `box scratch`.
+- **Tab bar (top) and status bar (bottom):** zellij's built-in plugins are on
+  so you can see the current mode and keybinds at all times. Press `Ctrl+p`
+  for pane mode, `Ctrl+t` for tab mode, `Ctrl+o` for session mode, etc.
 
-Detach with `Ctrl+p d` (zellij's default). The container keeps running. Come
-back later:
+Detach with `Ctrl+o d` — that's `Ctrl+o` to enter session mode, then `d` for
+detach. The container keeps running, your zellij session keeps its layout
+and scrollback, and you can reattach later:
 
 ```sh
 agentbox attach .

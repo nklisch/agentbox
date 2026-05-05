@@ -97,3 +97,37 @@ func TestModeRun_IsZeroValue(t *testing.T) {
 		t.Errorf("ModeRun should be zero value, got %d", m)
 	}
 }
+
+// ---- v0.2.3: tab-bar + status-bar via default_tab_template ----
+
+func TestGenerateKDL_Run_HasTabAndStatusBars(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		AgentCmd:   []string{"claude", "--dangerously-skip-permissions"},
+		ProjectAbs: "/tmp/abx-proj",
+		Shell:      "zsh",
+	})
+	for _, frag := range []string{
+		`default_tab_template`,
+		`plugin location="tab-bar"`,
+		`plugin location="status-bar"`,
+		`children`,
+	} {
+		if !strings.Contains(out, frag) {
+			t.Errorf("expected %q in run-mode output to surface zellij keybinds:\n%s", frag, out)
+		}
+	}
+}
+
+func TestGenerateKDL_Shell_HasTabAndStatusBars(t *testing.T) {
+	out := GenerateKDL(Layout{Mode: ModeShell, ProjectAbs: "/p", Shell: "zsh"})
+	for _, frag := range []string{
+		`default_tab_template`,
+		`plugin location="tab-bar"`,
+		`plugin location="status-bar"`,
+	} {
+		if !strings.Contains(out, frag) {
+			t.Errorf("expected %q in shell-mode output:\n%s", frag, out)
+		}
+	}
+}
