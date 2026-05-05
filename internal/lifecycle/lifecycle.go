@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"golang.org/x/term"
 
 	"github.com/nklisch/agentbox/internal/config"
 	"github.com/nklisch/agentbox/internal/container"
@@ -208,12 +209,19 @@ func (l *Lifecycle) Shell(opts RunOpts) error {
 	return l.Run(opts)
 }
 
-// shellInto execs an interactive zsh in the running box, inheriting stdio.
+// shellInto execs zsh in the running box, inheriting stdio.
+//
+// TTY allocation tracks whether stdin is itself a terminal: when called from
+// an interactive shell we pass `-it` to podman so the user gets line editing
+// and signals; when stdin is redirected (a file, /dev/null, a pipe), we pass
+// only `-i` so the inner shell reads from the redirected stream and exits on
+// EOF instead of blocking on the pty.
 func (l *Lifecycle) shellInto(box container.Box) error {
+	tty := isTerminal(os.Stdin)
 	code, err := l.Runtime.Exec(container.ContainerName(box.ProjectID), container.ExecOpts{
 		Argv:        []string{l.Cfg.Shell.Shell},
 		Interactive: true,
-		TTY:         true,
+		TTY:         tty,
 		Stdin:       os.Stdin,
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
@@ -281,8 +289,11 @@ func (l *Lifecycle) Exec(opts ExecOpts) error {
 	return nil
 }
 
-// Attach drops into an interactive shell in a running box. P3 implementation
-// is equivalent to Exec with the default shell + i+t flags.
+// Attach connects to a running box. With a TTY on stdin it drops into an
+// interactive shell (Phase 4 will swap zellij in). Without a TTY (scripted
+// invocations, test checkpoints) it verifies liveness and exits — running
+// an interactive zsh against /dev/null would block on the inner pty even
+// with `-i` only, so the non-TTY path is a deliberate sanity-check shape.
 func (l *Lifecycle) Attach(input string) error {
 	projID, err := l.ResolveID(input)
 	if err != nil {
@@ -296,6 +307,10 @@ func (l *Lifecycle) Attach(input string) error {
 	if box.Status != container.StatusRunning {
 		return exitcode.New(exitcode.NotFound,
 			"box %s is not running (status: %s)", projID, box.Status)
+	}
+	if !isTerminal(os.Stdin) {
+		fmt.Fprintf(l.Stdout, "%s (running)\n", box.ProjectID)
+		return nil
 	}
 	return l.shellInto(box)
 }
@@ -391,4 +406,15 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// isTerminal reports whether f is connected to a real TTY (not /dev/null,
+// not a pipe, not a regular file). Uses golang.org/x/term so /dev/null is
+// correctly distinguished from a real terminal — both are character devices
+// to the file mode, but only a terminal answers the TIOCGWINSZ ioctl.
+func isTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
 }
