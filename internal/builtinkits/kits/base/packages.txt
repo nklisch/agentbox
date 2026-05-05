@@ -1,5 +1,8 @@
 zsh
 git
+git-lfs
+make
+tree
 unzip
 xz-utils
 ca-certificates

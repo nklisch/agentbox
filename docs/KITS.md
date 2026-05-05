@@ -226,7 +226,7 @@ Built-in kits, shipped with the binary. All except `base` set `depends_on = ["ba
 
 | Kit          | Adds                                                                       |
 | ------------ | -------------------------------------------------------------------------- |
-| `base`       | `depends_on = []`. Shell (zsh + starship), modern CLI replacements (bat, eza, fd, rg, dust, duf, btm, procs), inspection tools (jq, yq, httpie, hyperfine, tldr, watchexec), forge clients (`gh`, `glab`), zellij, the `box` helpers. The minimum to feel pleasant. |
+| `base`       | `depends_on = []`. Shell (zsh + starship), modern CLI replacements (bat, eza, fd, rg, dust, duf, btm, procs), inspection tools (jq, yq, gron, `jgrep`, httpie, hyperfine, tldr, watchexec), git stack (git, git-lfs, delta), forge clients (`gh`, `glab`), build basics (make, tree), zellij, the `box` helpers. The minimum to feel pleasant. |
 | `polyglot`   | Node LTS + current (pnpm, bun, deno, yarn), Python (uv, ruff, pyenv), Go (gopls, golangci-lint, delve), Rust (rustup, cargo-watch, sccache), Ruby (rbenv), Java/Kotlin (sdkman, no JDK pre-installed), build tools (make, cmake, ninja, pkg-config), native (clang, lld, gdb, lldb), DB clients (psql, mysql, sqlite3, redis-cli). Chunky (~5GB). |
 | `node`       | Node LTS + current, pnpm, bun, deno, yarn. For when polyglot is overkill.  |
 | `python`     | uv (project + tool runner), ruff, pyenv.                                   |

@@ -349,8 +349,10 @@ sufficiently determined agent from misbehaving via legitimate channels.
 
 ### Inspection / debugging
 
-`jq`, `yq`, `htmlq`, `httpie` (`http` / `xh`), `dog`, `gron`, `hyperfine`, `tokei` /
-`scc`, `tealdeer` (`tldr`), `entr`, `watchexec`, `delta` (default git pager).
+`jq`, `yq`, `gron`, `jgrep` (gron|grep|gron round-trip wrapper), `httpie` (`http`),
+`hyperfine`, `tealdeer` (`tldr`), `watchexec`, `delta` (default git pager), `tree`,
+`make`. `git-lfs` is wired into git as a system hook so `git clone` of LFS repos
+pulls real blobs.
 
 ### Forge clients
 

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# jgrep — grep into JSON the easy way.
+#
+# Wraps the canonical gron round-trip:
+#   gron <input> | grep <args> | gron --ungron
+#
+# Usage:
+#   jgrep PATTERN file.json         # grep file
+#   jgrep PATTERN < file.json       # grep stdin
+#   curl -s api/x | jgrep PATTERN   # grep a stream
+#   jgrep -i PATTERN file.json      # any flag is forwarded to grep
+#
+# Notes:
+# - Returns reconstructed JSON containing only the matching paths.
+# - For raw "grep across paths" output, use `gron file.json | grep PATTERN`
+#   directly — jgrep always reassembles into JSON.
+# - Forwards every argument except the trailing path (if any) to grep.
+
+set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+    echo "usage: jgrep [grep flags] PATTERN [file]" >&2
+    echo "       cmd | jgrep PATTERN" >&2
+    exit 2
+fi
+
+# If the last argument is an existing file, treat it as the input source
+# and pass everything before it to grep. Otherwise read from stdin.
+last="${@: -1}"
+if [ -f "$last" ]; then
+    args=("${@:1:$#-1}")
+    gron "$last" | grep "${args[@]}" | gron --ungron
+else
+    gron | grep "$@" | gron --ungron
+fi

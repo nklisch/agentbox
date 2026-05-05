@@ -23,6 +23,7 @@ ZOXIDE_VERSION="${ZOXIDE_VERSION:-0.9.9}"        # ajeetdsouza/zoxide — musl o
 DELTA_VERSION="${DELTA_VERSION:-0.19.2}"         # dandavison/delta — not in Debian Bookworm; binary in versioned subdir
 GH_VERSION="${GH_VERSION:-2.92.0}"               # cli/cli — binary in {archive}/bin/gh; uses GO_ARCH (amd64/arm64)
 GLAB_VERSION="${GLAB_VERSION:-1.93.0}"           # gitlab-org/cli on GitLab — binary in bin/glab at archive root; uses GO_ARCH
+GRON_VERSION="${GRON_VERSION:-0.7.1}"            # tomnomnom/gron — single binary at archive root; uses GO_ARCH
 
 # --- Arch detection ---
 ARCH="$(uname -m)"
@@ -167,6 +168,19 @@ curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downlo
 tar -xzf "$TMP/glab.tar.gz" -C "$TMP"
 install -m 0755 "$TMP/bin/glab" /usr/local/bin/glab
 
+# --- gron (JSON to grep-able assignments) ---
+# Asset name: gron-linux-{GO_ARCH}-{VER}.tgz; single `gron` binary at archive root.
+# Pairs with the jgrep wrapper installed below.
+curl -fsSL "https://github.com/tomnomnom/gron/releases/download/v${GRON_VERSION}/gron-linux-${GO_ARCH}-${GRON_VERSION}.tgz" \
+  -o "$TMP/gron.tgz"
+tar -xzf "$TMP/gron.tgz" -C "$TMP" gron
+install -m 0755 "$TMP/gron" /usr/local/bin/gron
+
+# --- git-lfs system hooks ---
+# The apt package provides the binary; system-wide hook install makes
+# `git clone` of LFS repos pull real blobs instead of pointer files.
+git lfs install --system --skip-repo
+
 # --- httpie (pretty HTTP client) and tldr (community man pages) ---
 # pip3 packages — python3-pip is not in packages.txt because we want the
 # install.sh apt layer separate from the packages.txt apt layer.
@@ -183,6 +197,10 @@ install -m 0755 "${KIT_DIR}/box-net"     /usr/local/bin/box-net
 install -m 0755 "${KIT_DIR}/box-scratch" /usr/local/bin/box-scratch
 install -m 0755 "${KIT_DIR}/box-save"    /usr/local/bin/box-save
 install -m 0755 "${KIT_DIR}/box-help"    /usr/local/bin/box-help
+
+# --- jgrep (gron-grep round-trip wrapper) ---
+# Lets agents grep into JSON without composing the gron pipeline by hand.
+install -m 0755 "${KIT_DIR}/jgrep"       /usr/local/bin/jgrep
 
 # --- Bridge env.d into zsh ---
 # Phase 2's Dockerfile generator writes the env.d sourcing loop to
@@ -222,7 +240,9 @@ command -v starship >/dev/null && eval "$(starship init zsh)"
 # Aliases
 alias ll='eza -la'
 alias l='eza -l'
-alias tree='eza --tree'
+# `tree` is the real GNU tree from apt — kept canonical so interactive
+# and non-interactive shells produce the same output. `eza --tree` is
+# still available if you want git-aware tree output.
 ZSHRC
 
 # Default shell for root is zsh. The agentbox container runs as root.
