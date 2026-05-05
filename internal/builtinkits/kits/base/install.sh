@@ -163,10 +163,27 @@ install -m 0755 "${KIT_DIR}/box-scratch" /usr/local/bin/box-scratch
 install -m 0755 "${KIT_DIR}/box-save"    /usr/local/bin/box-save
 install -m 0755 "${KIT_DIR}/box-help"    /usr/local/bin/box-help
 
+# --- Bridge env.d into zsh ---
+# Phase 2's Dockerfile generator writes the env.d sourcing loop to
+# /etc/profile.d/agentbox.sh, which only runs for bash login shells.
+# zsh (the default agentbox shell) doesn't source /etc/profile.d. Append
+# the loop to /etc/zsh/zshenv (sourced for ALL zsh invocations:
+# interactive, login, scripts) so kit env.sh files take effect there too.
+mkdir -p /etc/zsh
+if ! grep -q '/etc/agentbox/env.d' /etc/zsh/zshenv 2>/dev/null; then
+    cat >> /etc/zsh/zshenv <<'ZSHENV'
+# agentbox: source kit env exports
+if [ -d /etc/agentbox/env.d ]; then
+    for f in /etc/agentbox/env.d/*.sh; do
+        [ -r "$f" ] && . "$f"
+    done
+fi
+ZSHENV
+fi
+
 # --- Interactive shell setup via /etc/zsh/zshrc ---
 # Per KITS.md, env.sh is exports+PATH only. Interactive-shell init
 # (prompt, key bindings, aliases) lives here instead.
-mkdir -p /etc/zsh
 cat >> /etc/zsh/zshrc <<'ZSHRC'
 
 # --- agentbox base kit additions ---
