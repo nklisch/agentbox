@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Started:** 2026-05-04
 **Last updated:** 2026-05-05
-**Phases since last refactor:** 6
+**Phases since last refactor:** 7
 **Total refactor passes:** 0
 
 ---
@@ -18,8 +18,8 @@
 | 4 | Zellij-in-box, layout generation, `box` helpers | done | 2026-05-05 |
 | 5 | Runtime kits + agent kits + agent integration | done | 2026-05-05 |
 | 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | done | 2026-05-05 |
-| 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | pending | — |
-| 8 | macOS support, Docker fallback, completion, ship | pending | — |
+| 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | done | 2026-05-05 |
+| 8 | macOS support, Docker fallback, completion, ship | active | — |
 
 ---
 
@@ -93,6 +93,61 @@ Implementation stats:
   (`18473b1`).
 
 Part C of Phase 5 remains (agent kits: claude, codex, opencode + config defaults).
+
+---
+
+## Phase 7 Notes
+
+What's now possible that wasn't before:
+- `agentbox build containers` produces an image with podman + buildah +
+  skopeo + podman-compose + docker-compose + fuse-overlayfs + slirp4netns
+  + uidmap + crun on PATH. A `/usr/local/bin/docker` shim translates
+  `docker run` to `podman` invocations (works in non-interactive shells
+  where bash aliases don't expand).
+- With `[containers] enable = true` in config, `agentbox run` adds
+  `--device /dev/fuse --cap-add SETUID --cap-add SETGID --security-opt
+  seccomp=/etc/agentbox/seccomp/containers.json --security-opt
+  unmask=/proc/sys/net/ipv4` to the podman create invocation.
+- Inside the box, agents can `docker run --rm hello-world` and
+  `docker compose up postgres` — and the agentbox network policy from
+  Phase 6 extends through to inner containers because rootless podman
+  shares the box's network namespace.
+- `agentbox doctor` now WARNs when `containers` is in `DefaultKits` but
+  `runtime.containers.enable=false`, with an actionable message pointing
+  at the config file.
+- `DefaultKits` is back to `["polyglot", "containers", "claude"]` (Phase 5
+  Part C had trimmed it). `Containers.Enable` stays `false` by default —
+  opt-in for runtime privileges.
+
+Bundled seccomp profile: copied verbatim from
+https://raw.githubusercontent.com/containers/common/main/pkg/seccomp/seccomp.json
+(podman's canonical default). All required syscalls (`clone3`, `mount`,
+`unshare`, `umount2`, `pivot_root`, `setdomainname`, `keyctl`) were
+already in the upstream allow list — no JSON edits required.
+
+Pinned versions:
+- `podman-compose` 1.5.0 (pip)
+- `docker-compose` 5.1.3 (GitHub release binary)
+
+Notable design observations:
+- **dry-run path needed seccomp wiring too.** `cli/run.go`'s `runDryRun`
+  builds `BuildInput` directly without going through lifecycle, so it
+  also needed an `EnsureContainersProfile()` call to thread `SeccompPath`
+  through. Otherwise the dry-run output would be missing the seccomp
+  bind-mount line, making it dishonest. Caught and fixed.
+- **`catatonit` dropped from packages.txt** preemptively (couldn't verify
+  Bookworm availability at write time). Podman runs fine without it for
+  the test checkpoint; can be re-added later if needed.
+
+Implementation stats:
+- 1 Sonnet agent. 7 new files (+ 4 edited Go files + 2 test files).
+- Full ROADMAP test checkpoint (`docker run --rm hello-world` + `docker
+  compose up redis`) deferred to manual user verification — requires
+  host kernel + namespace setup that varies across dev machines.
+- Commits: design (`9a93850`), Phase 7 impl (`0662b3a`).
+
+Phase 8 (macOS support, Docker fallback, completion, ship) is now active.
+This is the final phase — after it, v0.1 ships.
 
 ---
 
