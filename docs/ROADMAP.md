@@ -190,6 +190,12 @@ agentbox rm .
 **Goal:** `agentbox run --network safe` and `--network allowlist` apply real DNS-and-IP
 filtering. `box net` shows what's been queried.
 
+> **Implementation deviations** (see PROGRESS.md for detail): CoreDNS is pinned to
+> `docker.io/coredns/coredns:1.14.3`, not `:latest`. CoreDNS 1.14.3's `log` plugin is
+> stdout-only — `box net` reads queries via `podman logs <coredns-sidecar>` instead of a
+> mounted `queries.log` file, and the netfilter daemon tails `podman logs --follow` to
+> populate the ipset. The ipset name is `abx-<12hex>-a` (length-constrained).
+
 **Build:**
 - Per-project podman network creation: `agentbox-net-<project_id>`
 - CoreDNS sidecar container (small image: `coredns/coredns:latest` + generated Corefile)
@@ -233,6 +239,12 @@ agentbox rm .
 
 **Goal:** `docker run` and `docker compose up` work from inside the box, without
 `--privileged` and without mounting the host docker socket.
+
+> **Implementation deviation:** the config table is `[containers]`, not
+> `[runtime.containers]`. The original spelling collided with the top-level `runtime =
+> "podman"` key (TOML forbids a key being both a value and a table parent). The block was
+> renamed during Phase 1; Phase 7 picked it up as `[containers]`. SPEC.md, CLI.md, and
+> the live config reflect the renamed shape.
 
 **Build:**
 - `containers` kit: podman + buildah + skopeo + podman-compose + docker-compose +

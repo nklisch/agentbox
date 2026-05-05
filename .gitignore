@@ -1,3 +1,5 @@
 /agentbox
+/agentbox-netfilter
 dist/
 *.test
+.claude/
