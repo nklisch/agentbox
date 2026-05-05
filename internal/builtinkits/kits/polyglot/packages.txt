@@ -1,0 +1,44 @@
+# node deps
+ca-certificates
+gnupg
+libatomic1
+# python (pyenv compiles from source — needs all dev headers)
+python3
+python3-venv
+python3-pip
+python3-dev
+build-essential
+libssl-dev
+zlib1g-dev
+libbz2-dev
+libreadline-dev
+libsqlite3-dev
+libffi-dev
+liblzma-dev
+# go
+git
+# rust
+pkg-config
+# systems: C/C++ toolchain
+clang
+lld
+lldb
+cmake
+ninja-build
+gdb
+valgrind
+# DB clients
+postgresql-client
+default-mysql-client
+sqlite3
+redis-tools
+# ruby: rbenv build deps
+autoconf
+patch
+libyaml-dev
+libgmp-dev
+libgdbm-dev
+libgdbm-compat-dev
+# java/kotlin via sdkman: needs zip + unzip + curl (curl already in base)
+zip
+unzip

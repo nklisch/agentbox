@@ -1,0 +1,12 @@
+name        = "polyglot"
+description = "Everything kit: Node + Python + Go + Rust + Ruby + Java/Kotlin (sdkman) + build tools + DB clients. Chunky (~3-4GB)."
+depends_on  = ["base"]
+provides    = ["node", "python", "go", "rust", "systems"]  # documentation only — resolver ignores this field
+
+# NOTE: "node" is intentionally NOT in conflicts_with.
+# claude's depends_on = ["base", "node"] causes the resolver to walk "node" into the
+# resolved set. If "node" were listed here, `agentbox build polyglot,claude` would error
+# because the conflict check runs on the full walked set (post depends_on expansion).
+# Omitting "node" allows polyglot + claude to compose cleanly. The duplicate node install
+# is idempotent and costs ~50-100 MB of extra disk; see design/phase-5.md cross-cutting notes.
+conflicts_with = ["python", "go", "rust", "systems"]
