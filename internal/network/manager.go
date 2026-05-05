@@ -3,8 +3,10 @@ package network
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"syscall"
 
 	"github.com/nklisch/agentbox/internal/config"
 	"github.com/nklisch/agentbox/internal/container"
@@ -15,7 +17,9 @@ import (
 // writes the Corefile, starts the CoreDNS sidecar.
 // It follows the same orchestrator pattern as internal/lifecycle.
 type Manager struct {
-	Runtime container.Runtime
+	Runtime      container.Runtime
+	IPTables     *IPTables // nil means iptables enforcement is disabled
+	NetfilterBin string    // path/name of agentbox-netfilter binary; defaults to "agentbox-netfilter"
 }
 
 // SpecFor builds a Spec for the given project + config.
@@ -96,6 +100,22 @@ func (m *Manager) Setup(spec Spec) (Info, error) {
 		return Info{}, fmt.Errorf("sidecar start: %w", err)
 	}
 
+	// Part B: set up iptables/ipset and start the netfilter daemon when enabled.
+	if spec.IpsetEnabled() && m.IPTables != nil {
+		if err := m.IPTables.SetupRules(spec); err != nil {
+			return Info{}, fmt.Errorf("iptables setup: %w", err)
+		}
+		if spec.Mode == ModeAllowlist {
+			if err := m.IPTables.PrePopulate(spec, spec.Cfg.Network.Allowlist.Allow); err != nil {
+				// Best-effort: log but don't abort setup.
+				fmt.Fprintf(os.Stderr, "warning: allowlist prepopulate: %v\n", err)
+			}
+		}
+		if err := m.startNetfilterDaemon(spec); err != nil {
+			return Info{}, fmt.Errorf("netfilter daemon start: %w", err)
+		}
+	}
+
 	return Info{
 		NetworkName: spec.NetworkName,
 		// SidecarIP is deterministic from the project_id — no need to inspect
@@ -108,10 +128,23 @@ func (m *Manager) Setup(spec Spec) (Info, error) {
 
 // Teardown stops + removes the sidecar and the podman network.
 // Idempotent: missing pieces are not errors.
+//
+// Teardown order (reverses Setup order):
+//  1. Stop the netfilter daemon (SIGTERM, best-effort).
+//  2. Teardown iptables/ipset rules (best-effort).
+//  3. Remove sidecar container (force).
+//  4. Remove the podman network.
 func (m *Manager) Teardown(spec Spec) error {
 	if !spec.Mode.Filtered() {
 		return nil
 	}
+
+	// Part B: stop daemon + teardown iptables before touching the network.
+	if spec.IpsetEnabled() && m.IPTables != nil {
+		_ = m.stopNetfilterDaemon(spec)    // best-effort: missing PID or dead process is OK
+		_ = m.IPTables.TeardownRules(spec) // best-effort: missing rules/set is OK
+	}
+
 	// Remove sidecar first (it's attached to the network), then the network.
 	if err := m.Runtime.Rm(spec.SidecarName, true); err != nil {
 		return fmt.Errorf("sidecar rm: %w", err)
@@ -119,6 +152,97 @@ func (m *Manager) Teardown(spec Spec) error {
 	if err := m.Runtime.NetworkRm(spec.NetworkName); err != nil {
 		return fmt.Errorf("network rm: %w", err)
 	}
+	return nil
+}
+
+// netfilterBin returns the effective binary path/name for agentbox-netfilter.
+// Falls back to "agentbox-netfilter" (expected on PATH after `make install`).
+func (m *Manager) netfilterBin() string {
+	if m.NetfilterBin != "" {
+		return m.NetfilterBin
+	}
+	return "agentbox-netfilter"
+}
+
+// startNetfilterDaemon forks agentbox-netfilter as a detached background process.
+//
+// The daemon is spawned with Setsid=true so it survives the parent process
+// exiting. The PID is written to <state-dir>/netfilter.pid for later cleanup
+// by stopNetfilterDaemon.
+//
+// The daemon needs CAP_NET_ADMIN to call ipset — it runs under sudo when
+// IPTables.Sudo is true (which it is when agentbox runs as a normal user).
+func (m *Manager) startNetfilterDaemon(spec Spec) error {
+	stateDir, err := state.SessionDir(spec.ProjectID)
+	if err != nil {
+		return fmt.Errorf("session dir: %w", err)
+	}
+
+	bin := m.netfilterBin()
+	args := []string{
+		bin,
+		"--coredns-container", spec.SidecarName,
+		"--ipset", ipsetName(spec),
+	}
+
+	var cmd *exec.Cmd
+	if m.IPTables != nil && m.IPTables.Sudo {
+		sudoArgs := append([]string{"-n"}, args...)
+		cmd = exec.Command("sudo", sudoArgs...)
+	} else {
+		cmd = exec.Command(args[0], args[1:]...)
+	}
+
+	// Detach: new session so the daemon outlives the parent.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start netfilter daemon: %w", err)
+	}
+	pid := cmd.Process.Pid
+
+	// Write PID file for later cleanup.
+	pidFile := filepath.Join(stateDir, "netfilter.pid")
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+		// Non-fatal: daemon is running; we just can't signal it cleanly later.
+		fmt.Fprintf(os.Stderr, "warning: write netfilter.pid: %v\n", err)
+	}
+
+	// Release the process handle — we don't want to reap it.
+	_ = cmd.Process.Release()
+	return nil
+}
+
+// stopNetfilterDaemon reads <state-dir>/netfilter.pid and sends SIGTERM.
+// Best-effort: missing PID file or already-dead process is not an error.
+func (m *Manager) stopNetfilterDaemon(spec Spec) error {
+	stateDir, err := state.SessionDir(spec.ProjectID)
+	if err != nil {
+		return nil // can't locate PID file — give up quietly
+	}
+	pidFile := filepath.Join(stateDir, "netfilter.pid")
+	data, err := os.ReadFile(pidFile)
+	if os.IsNotExist(err) {
+		return nil // no daemon was started
+	}
+	if err != nil {
+		return nil // unreadable — best-effort
+	}
+
+	var pid int
+	if _, err := fmt.Sscan(string(data), &pid); err != nil || pid <= 0 {
+		return nil
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return nil
+	}
+	// SIGTERM is polite; the daemon catches it and exits cleanly.
+	_ = proc.Signal(syscall.SIGTERM)
+	_ = os.Remove(pidFile)
 	return nil
 }
 

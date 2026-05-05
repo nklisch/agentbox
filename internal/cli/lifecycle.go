@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/nklisch/agentbox/internal/builtinkits"
 	"github.com/nklisch/agentbox/internal/config"
@@ -32,13 +33,22 @@ var newLifecycle = func(cfg config.Config) (*lifecycle.Lifecycle, error) {
 		Runner:   kits.NewPodmanRunner(cfg.Runtime),
 		Version:  version.Version,
 	}
+	// Determine whether to use sudo for iptables/ipset.
+	// On macOS, ipset/iptables enforcement is not available; Sudo is irrelevant
+	// (IpsetEnabled() returns false on darwin). On Linux, use sudo unless already root.
+	sudoIPTables := runtime.GOOS != "darwin" && os.Getuid() != 0
+
 	return &lifecycle.Lifecycle{
 		Cfg:     cfg,
 		Runtime: rt,
 		Builder: builder,
-		Network: &network.Manager{Runtime: rt},
-		Home:    home,
-		Stdout:  os.Stdout,
-		Stderr:  os.Stderr,
+		Network: &network.Manager{
+			Runtime:      rt,
+			IPTables:     &network.IPTables{Sudo: sudoIPTables},
+			NetfilterBin: "agentbox-netfilter",
+		},
+		Home:   home,
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
 	}, nil
 }

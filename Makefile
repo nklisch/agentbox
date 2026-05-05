@@ -9,11 +9,13 @@ LDFLAGS := -s -w \
 .PHONY: build test vet install clean
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o agentbox ./cmd/agentbox
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o agentbox-netfilter ./cmd/agentbox-netfilter
 test:
 	go test ./...
 vet:
 	go vet ./...
 install: build
 	install -m 0755 agentbox $(HOME)/.local/bin/agentbox
+	install -m 0755 agentbox-netfilter $(HOME)/.local/bin/agentbox-netfilter
 clean:
-	rm -f agentbox
+	rm -f agentbox agentbox-netfilter
