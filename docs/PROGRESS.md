@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Started:** 2026-05-04
 **Last updated:** 2026-05-05
-**Phases since last refactor:** 5
+**Phases since last refactor:** 6
 **Total refactor passes:** 0
 
 ---
@@ -17,7 +17,7 @@
 | 3 | Container lifecycle — run / shell / exec / attach / ls / rm | done | 2026-05-05 |
 | 4 | Zellij-in-box, layout generation, `box` helpers | done | 2026-05-05 |
 | 5 | Runtime kits + agent kits + agent integration | done | 2026-05-05 |
-| 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | active (Part A done) | — |
+| 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | done | 2026-05-05 |
 | 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | pending | — |
 | 8 | macOS support, Docker fallback, completion, ship | pending | — |
 
@@ -138,7 +138,64 @@ Implementation stats:
 - Commits: design (`9351348`), Part A impl (`a70e016`), dispatcher fix
   (`3a2b63d`).
 
-Part B (iptables + ipset egress filter) remains.
+Part B (iptables + ipset egress filter) landed at `33e47a7`.
+
+---
+
+## Phase 6 Part B Notes
+
+What's now possible that wasn't before:
+- `curl https://1.1.1.1` from inside a `safe` box with `block_direct_ip = true`
+  is dropped at the iptables level — not just NXDOMAIN at DNS, but real packet
+  drops via a FORWARD chain rule. Same for `allowlist` mode.
+- `agentbox doctor` shows four new checks: `iptables`, `ipset`, `sudo-iptables`,
+  `coredns-image`. Each is clear and actionable.
+- `make build` produces both `agentbox` and `agentbox-netfilter`; `make install`
+  copies both to `~/.local/bin/`.
+
+ipset name choice: `abx-<12hex>-a` (18 chars, well within ipset's 31-char limit).
+- `abx` = agentbox abbreviation.
+- `a` = allowed (as opposed to a future deny-set).
+- The design considered `agentbox-net-<12hex>-allowed` (36 chars, too long).
+- This name lives only in the kernel ipset table — it is not user-facing.
+
+Requirements documented:
+- `safe` mode with `block_direct_ip = true` (default) and `allowlist` mode
+  require passwordless `sudo` for `iptables` and `ipset`. Configure via:
+  ```
+  ALL ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/local/bin/agentbox-netfilter
+  ```
+  or equivalent via `visudo`. `agentbox doctor` warns clearly if not configured.
+
+Notable implementation deviations from the design doc:
+- **Daemon tails `podman logs --follow`, not a file.** CoreDNS 1.14.3's log
+  plugin writes to stdout only (documented in Part A). The daemon uses
+  `io.Pipe` to capture `podman logs --follow` output rather than the design's
+  file-tail approach.
+- **`ipset add` uses `-exist` flag.** Both `-exist` and `--exist` are accepted
+  by modern ipset; the short form is correct.
+- **Private/loopback IPs are skipped by the daemon.** IPs matching
+  `net.IP.IsLoopback()`, `IsPrivate()`, or `IsLinkLocalUnicast()` are not added
+  to the ipset (they'd be benign but noisy).
+- **`sudo -n` on the daemon itself.** `startNetfilterDaemon` prepends `sudo -n`
+  to the binary invocation when `IPTables.Sudo` is true, so the daemon can call
+  `ipset add` without additional sudo wrappers inside the binary.
+
+Verification status:
+- `go build ./...`, `go test ./...`, `go vet ./...` all pass.
+- `make build` produces both binaries (CGO_ENABLED=0, static).
+- Domain purity: no cobra or internal/cli imports in internal/network or
+  cmd/agentbox-netfilter.
+- `agentbox doctor` shows correct checks.
+- Runtime iptables smoke test (curl https://1.1.1.1 → BLOCKED) requires
+  passwordless sudo which is not configured on the dev machine. Deferred to
+  manual verification.
+
+Implementation stats:
+- 1 Sonnet agent. 7 files created/edited, ~908 LOC delta.
+- Commit: `33e47a7`.
+
+Phase 6 is fully closed.
 
 ---
 
@@ -440,7 +497,7 @@ Implementation stats:
 
 - Update SPEC.md to reflect `[containers]` rename (deviation from Phase 1 design).
 - After Phase 5, ROADMAP Phase 3 test checkpoint should work without an `.agentbox.toml` override (polyglot/claude kits will exist).
-- After Phase 6, the network-mode degradation in `Lifecycle.degradeNetworkMode` should be replaced with real safe/allowlist plumbing. The warning string + fallback are temporary scaffolding.
+- After Phase 6, the network-mode degradation in `Lifecycle.degradeNetworkMode` should be replaced with real safe/allowlist plumbing. The warning string + fallback are temporary scaffolding. (Done — degradeNetworkMode is gone; setupNetwork calls the real Manager.)
 
 ---
 
