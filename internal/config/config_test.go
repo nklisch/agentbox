@@ -32,6 +32,68 @@ func TestDefaultConfig_ContainersDisabled(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_AgentsHasOpencode(t *testing.T) {
+	cfg := config.DefaultConfig()
+	agent, ok := cfg.Agents["opencode"]
+	if !ok {
+		t.Fatal("DefaultConfig().Agents missing 'opencode' entry")
+	}
+	if len(agent.Kits) == 0 {
+		t.Error("DefaultConfig().Agents['opencode'].Kits should not be empty")
+	}
+	if len(agent.Cmd) == 0 {
+		t.Error("DefaultConfig().Agents['opencode'].Cmd should not be empty")
+	}
+	if agent.Cmd[0] != "opencode" {
+		t.Errorf("DefaultConfig().Agents['opencode'].Cmd[0] = %q, want %q", agent.Cmd[0], "opencode")
+	}
+}
+
+func TestDefaultConfig_AgentsHasClaude(t *testing.T) {
+	cfg := config.DefaultConfig()
+	agent, ok := cfg.Agents["claude"]
+	if !ok {
+		t.Fatal("DefaultConfig().Agents missing 'claude' entry")
+	}
+	if len(agent.Cmd) < 2 || agent.Cmd[1] != "--dangerously-skip-permissions" {
+		t.Errorf("DefaultConfig().Agents['claude'].Cmd = %v, want second element --dangerously-skip-permissions", agent.Cmd)
+	}
+}
+
+func TestDefaultConfig_AgentsHasCodex(t *testing.T) {
+	cfg := config.DefaultConfig()
+	agent, ok := cfg.Agents["codex"]
+	if !ok {
+		t.Fatal("DefaultConfig().Agents missing 'codex' entry")
+	}
+	if len(agent.Cmd) < 2 || agent.Cmd[1] != "--dangerously-bypass-approvals-and-sandbox" {
+		t.Errorf("DefaultConfig().Agents['codex'].Cmd = %v, want second element --dangerously-bypass-approvals-and-sandbox", agent.Cmd)
+	}
+}
+
+func TestDefaultConfig_DefaultKitsExcludesContainers(t *testing.T) {
+	cfg := config.DefaultConfig()
+	for _, k := range cfg.DefaultKits {
+		if k == "containers" {
+			t.Error("DefaultConfig().DefaultKits should not contain 'containers' until Phase 7")
+		}
+	}
+}
+
+func TestDefaultConfig_DefaultKitsContainsClaude(t *testing.T) {
+	cfg := config.DefaultConfig()
+	found := false
+	for _, k := range cfg.DefaultKits {
+		if k == "claude" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("DefaultConfig().DefaultKits = %v, want 'claude' to be present", cfg.DefaultKits)
+	}
+}
+
 func TestDefaultConfig_ValidatesClean(t *testing.T) {
 	cfg := config.DefaultConfig()
 	if err := cfg.Validate(); err != nil {

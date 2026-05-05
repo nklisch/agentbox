@@ -1,0 +1,3 @@
+name        = "codex"
+description = "OpenAI Codex CLI (@openai/codex via npm)"
+depends_on  = ["base", "node"]

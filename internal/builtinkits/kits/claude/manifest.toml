@@ -1,0 +1,3 @@
+name        = "claude"
+description = "Claude Code (@anthropic-ai/claude-code via npm)"
+depends_on  = ["base", "node"]

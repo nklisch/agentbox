@@ -1,0 +1,3 @@
+name        = "opencode"
+description = "opencode AI coding agent (sst/opencode binary release)"
+depends_on  = ["base"]

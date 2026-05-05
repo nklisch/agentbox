@@ -81,7 +81,8 @@ func DefaultConfig() Config {
 	return Config{
 		Runtime:      "podman",
 		DefaultAgent: "claude",
-		DefaultKits:  []string{"polyglot", "containers", "claude"},
+		// "containers" returns in Phase 7 (nested rootless podman support).
+		DefaultKits: []string{"polyglot", "claude"},
 		Network: Network{
 			Mode: "safe",
 			Safe: NetworkSafe{
@@ -128,11 +129,20 @@ func DefaultConfig() Config {
 		Agents: map[string]Agent{
 			"claude": {
 				Kits: []string{"polyglot", "claude"},
-				Cmd:  []string{"claude", "--dangerously-skip-permissions"},
+				// YOLO flag verified 2026-05-05 against @anthropic-ai/claude-code@2.1.128.
+				Cmd: []string{"claude", "--dangerously-skip-permissions"},
 			},
 			"codex": {
 				Kits: []string{"polyglot", "codex"},
-				Cmd:  []string{"codex"},
+				// YOLO flag verified 2026-05-05 against @openai/codex@0.128.0.
+				Cmd: []string{"codex", "--dangerously-bypass-approvals-and-sandbox"},
+			},
+			"opencode": {
+				Kits: []string{"polyglot", "opencode"},
+				// opencode v1.14.37: --dangerously-skip-permissions is on the `run` subcommand
+				// only; the TUI (bare `opencode`) has no equivalent flag. Use bare command for
+				// interactive in-box use. Non-interactive automation can use `opencode run --dangerously-skip-permissions`.
+				Cmd: []string{"opencode"},
 			},
 		},
 	}
