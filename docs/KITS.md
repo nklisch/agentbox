@@ -227,14 +227,14 @@ Built-in kits, shipped with the binary. All except `base` set `depends_on = ["ba
 | Kit          | Adds                                                                       |
 | ------------ | -------------------------------------------------------------------------- |
 | `base`       | `depends_on = []`. Shell (zsh + starship), modern CLI replacements (bat, eza, fd, rg, dust, duf, btm, procs), inspection tools (jq, yq, httpie, hyperfine, tldr, watchexec), zellij, the `box` helpers. The minimum to feel pleasant. |
-| `polyglot`   | Node LTS + current (pnpm, bun, deno, yarn), Python (uv, ruff, pyenv), Go (gopls, golangci-lint), Rust (rustup, cargo-watch, sccache), Ruby (rbenv), Java/Kotlin (sdkman, no JDK pre-installed), build tools (make, cmake, ninja, pkg-config), native (clang, lld, gdb, lldb), DB clients (psql, mysql, sqlite3, redis-cli). Chunky (~3-4GB). |
+| `polyglot`   | Node LTS + current (pnpm, bun, deno, yarn), Python (uv, ruff, pyenv), Go (gopls, golangci-lint, delve), Rust (rustup, cargo-watch, sccache), Ruby (rbenv), Java/Kotlin (sdkman, no JDK pre-installed), build tools (make, cmake, ninja, pkg-config), native (clang, lld, gdb, lldb), DB clients (psql, mysql, sqlite3, redis-cli). Chunky (~5GB). |
 | `node`       | Node LTS + current, pnpm, bun, deno, yarn. For when polyglot is overkill.  |
 | `python`     | uv (project + tool runner), ruff, pyenv.                                   |
 | `go`         | Current stable Go toolchain, gopls, golangci-lint, delve.                  |
 | `rust`       | rustup (stable + nightly), cargo-watch, sccache.                           |
 | `systems`    | clang, lld, cmake, ninja, gdb, lldb, valgrind. For native / FFI work.      |
 | `cloud`      | aws-cli, gcloud, az, terraform, kubectl, helm.                             |
-| `containers` | Rootless podman, buildah, skopeo, podman-compose, docker-compose. Aliases `docker → podman` and configures the docker-compatibility socket so `docker compose` v2 works. **Requires `runtime.containers.enable = true`** in the host config — the kit installs the binaries; the host CLI grants the runtime relaxations (see SPEC.md). |
+| `containers` | Rootless podman, buildah, skopeo, podman-compose, docker-compose. Aliases `docker → podman` and configures the docker-compatibility socket so `docker compose` v2 works. **Requires `containers.enable = true`** in the host config — the kit installs the binaries; the host CLI grants the runtime relaxations (see SPEC.md). |
 | `claude`     | `@anthropic-ai/claude-code` (npm). Implicitly `depends_on = ["base", "node"]`. |
 | `codex`      | `@openai/codex` (npm). Implicitly `depends_on = ["base", "node"]`.         |
 | `opencode`   | opencode binary. `depends_on = ["base"]`.                                  |
@@ -254,7 +254,7 @@ For the box's *runtime spec* to actually allow nested containers (the `/dev/fuse
 the SETUID/SETGID caps, the looser seccomp profile), you also need:
 
 ```toml
-[runtime.containers]
+[containers]
 enable = true
 ```
 
@@ -376,7 +376,7 @@ agentbox run --kits polyglot,work,claude
   cache makes that a one-time cost per kit-list, but it's there. Use lean kits (`node +
   claude` etc.) when you don't need the kitchen sink.
 - **Some kits need host-side cooperation.** The `containers` kit is the only built-in
-  example today: it needs `runtime.containers.enable = true` to function. A kit can't
+  example today: it needs `containers.enable = true` to function. A kit can't
   unilaterally relax the runtime spec — that's a host-config decision. Custom kits that
   need anything beyond apt + install.sh + env.sh should document the corresponding host
   config explicitly.
@@ -391,5 +391,5 @@ agentbox run --kits polyglot,work,claude
 - **Kits don't persist state.** Anything written by `install.sh` lives in the image and is
   the same for every box that uses it. Per-box state happens at runtime via mounts.
 - **Kits don't relax the runtime spec on their own.** Even `containers` needs the host to
-  opt in via `runtime.containers.enable`. Kits change the *image*; the host CLI controls
+  opt in via `containers.enable`. Kits change the *image*; the host CLI controls
   the *runtime*.

@@ -82,10 +82,10 @@ cpus   = 4
 memory = "8g"
 pids   = 512
 
-[runtime.containers]
+[containers]
 # Enables nested rootless podman inside the box (for `docker run` / `compose` from
 # inside). Adds /dev/fuse and re-grants SETUID/SETGID. Pairs with the `containers` kit.
-enable        = true               # off by default; on when containers kit is in default_kits
+enable        = false              # off by default; opt-in
 extra_devices = ["/dev/fuse"]
 extra_caps    = ["SETUID", "SETGID"]
 seccomp       = "containers"       # bundled looser profile name; or path; or "unconfined"
@@ -102,7 +102,11 @@ cmd  = ["claude", "--dangerously-skip-permissions"]
 
 [agents.codex]
 kits = ["polyglot", "codex"]
-cmd  = ["codex"]                   # YOLO flag TBD per agent
+cmd  = ["codex", "--dangerously-bypass-approvals-and-sandbox"]
+
+[agents.opencode]
+kits = ["polyglot", "opencode"]
+cmd  = ["opencode"]                # no root-level YOLO flag; see Open / deferred
 ```
 
 ## Mount semantics
@@ -215,7 +219,7 @@ container start.
 
 ### Conditional flags (nested containers)
 
-When `runtime.containers.enable = true`, the CLI appends the following to `podman create`:
+When `containers.enable = true`, the CLI appends the following to `podman create`:
 
 ```
 --device /dev/fuse                                       # fuse-overlayfs storage
@@ -260,6 +264,15 @@ case (development inside the box) but worth knowing.
 | `safe`      | Custom Podman network with a CoreDNS sidecar forwarding to a threat-intel-filtered upstream (Quad9 by default). Egress to IPs not resolved via CoreDNS is dropped (`block_direct_ip = true` by default). See ARCHITECTURE.md. |
 | `allowlist` | Custom Podman network with a CoreDNS sidecar resolving only `network.allowlist.allow`; default route blocked via iptables. See ARCHITECTURE.md. |
 | `open`      | Default bridge network. No filtering.                                |
+
+**Sudo requirement:** `safe` mode with `block_direct_ip = true` (the default) and `allowlist`
+mode both require passwordless `sudo` for `iptables` and `ipset` on Linux. Configure via:
+
+```
+ALL ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset
+```
+
+or equivalent via `visudo`. `agentbox doctor` verifies this with the `sudo-iptables` check.
 
 `safe` is the **default and recommended mode** — broad internet access with a threat-intel
 DNS upstream and direct-IP egress blocked. Catches known-malicious destinations without the
@@ -369,12 +382,25 @@ host path is enough — edit on the host with whatever editor you already use.
   names only.
 - Unset vars are silently dropped (no error).
 
+## Installed binaries
+
+`make install` copies two binaries to `~/.local/bin/` (or the configured install prefix):
+
+- **`agentbox`** — the primary CLI.
+- **`agentbox-netfilter`** — a small daemon that tails `podman logs --follow` of the CoreDNS
+  sidecar and populates an ipset (`abx-<12hex>-a`) used by an iptables FORWARD rule. Launched
+  by the CLI when `block_direct_ip = true` or `mode = allowlist`; must be reachable via
+  `sudo -n agentbox-netfilter` (add to sudoers alongside `iptables`/`ipset`).
+
 ## Constraints
 
 - **No daemon.** All operations are one-shot CLI invocations. State lives in labels + state dir.
+  (`agentbox-netfilter` is a short-lived child process of the network-setup path, not a
+  persistent service.)
 - **No SDK for the container runtime.** Shell out to `podman` / `docker`. `--dry-run` prints
   the exact commands.
-- **Single static binary.** Distribute as a tarball or via Homebrew (later).
+- **Single static binary (main).** Distribute as a tarball or via Homebrew (later). Both
+  `agentbox` and `agentbox-netfilter` are CGO_ENABLED=0 static binaries.
 - **Shell out for zellij too.** No zellij library bindings.
 - **Per-project isolation.** No mechanism for sharing state between project boxes. If two
   projects need to talk, they're not isolated and shouldn't be in agentbox.
@@ -397,14 +423,11 @@ agentbox config [edit|show]       open or print effective config
 
 ## Open / deferred
 
-- Per-agent YOLO flags for `codex` and `opencode`. Verify at implementation time.
 - macOS container-only volumes for big build dirs (`node_modules`, `target`). Deferred until
   perf is actually a problem.
 - Kit image registry distribution (so first run is `pull` not `build`). v0.3+.
 - Worktree / auto-commit / sandbox-branch mode. Deferred indefinitely.
 - Snapshot / resume (`podman commit` + restart from snapshot). Deferred.
-- `agentbox init` for first-run UX (podman machine init on macOS, kit pre-builds).
-  Add only if `doctor` reports recurring friction.
 - ttyd in the kit for browser-based attach. Out of scope.
 - **Port forwarding from the box to the host.** Inner `docker run -p 8080:8080` only binds
   inside the box. v0.1 workaround: `agentbox exec . curl localhost:8080` from the host.
@@ -412,3 +435,6 @@ agentbox config [edit|show]       open or print effective config
 - **Shared rootless image cache across boxes.** Today every box with the `containers` kit
   has its own image cache; each project pulls its own `postgres:16`. A shared opt-in volume
   could amortize that. Out of scope for v0.1.
+- **`opencode` YOLO flag.** `opencode` has no root-level YOLO flag — `--dangerously-skip-permissions`
+  only applies to the `opencode run` subcommand, not the TUI. Users who want auto-confirm for
+  opencode must configure `cmd` in `[agents.opencode]` explicitly.

@@ -5,60 +5,68 @@ How the pieces fit. Read SPEC.md first for the *what*; this doc is the *how*.
 ## Component overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                            HOST                                     │
-│                                                                     │
-│   ┌──────────────────┐                                              │
-│   │  agentbox CLI    │  parse args → load config → resolve kit      │
-│   │  (Go binary)     │  → shell out to podman / zellij → exit       │
-│   └────────┬─────────┘                                              │
-│            │                                                        │
-│            │ shells out                                             │
-│            ▼                                                        │
-│   ┌──────────────────┐                                              │
-│   │  podman / docker │  manages container + network + volumes        │
-│   └────────┬─────────┘                                              │
-│            │                                                        │
-│   ┌────────┴────────────────────────────────────────────────┐       │
-│   │              custom podman network                       │       │
-│   │                                                          │       │
-│   │   ┌──────────────────────┐    ┌──────────────────────┐  │       │
-│   │   │  agentbox-<id>       │    │  CoreDNS sidecar     │  │       │
-│   │   │  (the box)           │    │  (safe / allowlist)  │  │       │
-│   │   │                      │    │                      │  │       │
-│   │   │  ┌────────────────┐  │    │  forwards to         │  │       │
-│   │   │  │  zellij        │  │    │  threat-feed DNS or  │  │       │
-│   │   │  │  ├ agent pane  │  │    │  resolves only       │  │       │
-│   │   │  │  ├ git pane    │  │    │  allowed hosts       │  │       │
-│   │   │  │  └ stats pane  │  │    │                      │  │       │
-│   │   │  │                │  │    │  iptables blocks     │  │       │
-│   │   │  ├ shell tab      │  │    │  unresolved-IP       │  │       │
-│   │   │  └ box helpers    │  │    │  egress              │  │       │
-│   │   └────────────────────┘  │    └──────────────────────┘  │       │
-│   │       │                                                  │       │
-│   │       │ bind mounts                                      │       │
-│   │       ▼                                                  │       │
-│   │   ┌────────────────────────────────────────────────┐     │       │
-│   │   │  $PWD (project)        same path inside        │     │       │
-│   │   │  ~/.gitconfig          rw                      │     │       │
-│   │   │  ~/.ssh                ro                      │     │       │
-│   │   │  ~/.claude (etc.)      rw                      │     │       │
-│   │   │  STATE_DIR/history     rw (persistent)         │     │       │
-│   │   │  STATE_DIR/layout.kdl  ro                      │     │       │
-│   │   └────────────────────────────────────────────────┘     │       │
-│   └──────────────────────────────────────────────────────────┘       │
-│                                                                      │
-│   ┌──────────────────────────────────────────────────────┐           │
-│   │  ~/.config/agentbox/        (config, custom kits)    │           │
-│   │  ~/.local/share/agentbox/   (sessions, cache)        │           │
-│   └──────────────────────────────────────────────────────┘           │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                HOST                                      │
+│                                                                          │
+│   ┌──────────────────┐    ┌───────────────────────────────────────────┐  │
+│   │  agentbox CLI    │    │  agentbox-netfilter (safe/allowlist only) │  │
+│   │  (Go binary)     │    │  tails podman logs --follow of sidecar;   │  │
+│   │  → shell out to  │    │  populates ipset abx-<id>-a;              │  │
+│   │  podman/zellij   │    │  run via sudo -n agentbox-netfilter        │  │
+│   └────────┬─────────┘    └───────────────────────────────────────────┘  │
+│            │                                                             │
+│            │ shells out                                                  │
+│            ▼                                                             │
+│   ┌──────────────────┐                                                   │
+│   │  podman / docker │  manages container + network + volumes             │
+│   └────────┬─────────┘                                                   │
+│            │                                                             │
+│   ┌────────┴──────────────────────────────────────────────────────┐      │
+│   │                 custom podman network                          │      │
+│   │                                                                │      │
+│   │  ┌──────────────────────┐    ┌──────────────────────────────┐  │      │
+│   │  │  agentbox-<id>       │    │  agentbox-coredns-<id>       │  │      │
+│   │  │  role=box            │    │  role=coredns                │  │      │
+│   │  │                      │    │  coredns:1.14.3              │  │      │
+│   │  │  ┌────────────────┐  │    │                              │  │      │
+│   │  │  │  zellij        │  │    │  forwards to threat-feed DNS │  │      │
+│   │  │  │  ├ agent pane  │  │    │  or resolves only allowed    │  │      │
+│   │  │  │  ├ git pane    │  │    │  hosts; logs to stdout       │  │      │
+│   │  │  │  └ stats pane  │  │    │                              │  │      │
+│   │  │  ├ shell tab      │  │    │  iptables FORWARD + ipset    │  │      │
+│   │  │  └ box helpers    │  │    │  block unresolved-IP egress  │  │      │
+│   │  └────────────────────┘  │    └──────────────────────────────┘  │      │
+│   │      │                                                          │      │
+│   │      │ bind mounts                                              │      │
+│   │      ▼                                                          │      │
+│   │  ┌────────────────────────────────────────────────┐             │      │
+│   │  │  $PWD (project)        same path inside        │             │      │
+│   │  │  ~/.gitconfig          rw                      │             │      │
+│   │  │  ~/.ssh                ro                      │             │      │
+│   │  │  ~/.claude (etc.)      rw                      │             │      │
+│   │  │  STATE_DIR/history     rw (persistent)         │             │      │
+│   │  │  STATE_DIR/layout.kdl  ro                      │             │      │
+│   │  └────────────────────────────────────────────────┘             │      │
+│   └──────────────────────────────────────────────────────────────────┘      │
+│                                                                             │
+│   ┌──────────────────────────────────────────────────────┐                  │
+│   │  ~/.config/agentbox/        (config, custom kits)    │                  │
+│   │  ~/.local/share/agentbox/   (sessions, cache)        │                  │
+│   └──────────────────────────────────────────────────────┘                  │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+In `safe` and `allowlist` modes three actors collaborate per box: the **box container**
+(role=box), the **CoreDNS sidecar** (role=coredns, image `docker.io/coredns/coredns:1.14.3`),
+and the host-side **agentbox-netfilter** process. The sidecar and netfilter are absent in
+`off` and `open` modes. `agentbox ls` filters to role=box so sidecars are hidden.
 
 Three things to internalize:
 
 1. **The CLI is short-lived.** Every `agentbox` command runs, mutates state via podman or
-   the filesystem, and exits. There is no background process.
+   the filesystem, and exits. There is no background process — except `agentbox-netfilter`,
+   which runs as a host-side child process for the duration of a box using `safe` or
+   `allowlist` network mode.
 2. **The container is long-lived.** Once created (per-project), it runs `sleep infinity` and
    stays up across detaches. All interaction happens through `podman exec`.
 3. **Zellij lives inside the box.** `agentbox run` is essentially "podman exec + zellij
@@ -241,9 +249,16 @@ allow set.
   }
   cache 300
   errors
-  log /var/log/coredns/queries.log
+  log . {
+    class all
+  }
 }
 ```
+
+CoreDNS 1.14.3's `log` plugin writes to **container stdout only** — no log file path is
+supported. Query history is read via `podman logs <coredns-sidecar>` from the host. `box net`
+inside the container fetches it the same way. The `agentbox-netfilter` daemon tails
+`podman logs --follow` live to populate the ipset.
 
 For `nextdns`, the forward target is `<id>.dns.nextdns.io` over DoH (CoreDNS's `forward`
 plugin supports DoH). For `custom`, the forward target is `network.safe.upstream_servers`.
@@ -300,27 +315,32 @@ hosts at container start.
 The mechanics:
 
 1. **Per-project podman network**, created on-demand: `agentbox-net-<project_id>`.
-2. **CoreDNS container** attached to that network at a fixed IP. Runs from a small image
-   built into the kit pipeline. Its Corefile is generated from `network.allowlist.allow`:
+2. **CoreDNS container** (`docker.io/coredns/coredns:1.14.3`, label `agentbox.role=coredns`)
+   attached to that network at a fixed IP. Its Corefile is generated from
+   `network.allowlist.allow`:
    ```
    . {
+     template IN ANY {
+       rcode NXDOMAIN
+     }
      forward npmjs.org pypi.org github.com . 1.1.1.1 8.8.8.8
      errors
-     log ./allowlist.log
+     log . {
+       class all
+     }
    }
    ```
+   Queries go to container stdout (CoreDNS 1.14.3 `log` plugin is stdout-only).
+   Read via `podman logs <sidecar>`.
 3. **Box's `/etc/resolv.conf` points only at CoreDNS.** No other resolvers.
-4. **Egress filtering** — two strategies, both viable:
-   - **Netavark plugin** (Podman): drop all egress on the network's interface, allow only
-     IPs that CoreDNS has recently resolved (read from CoreDNS's log). This is the cleaner
-     long-term solution.
-   - **iptables on the host**: per-network DROP rule, with an `ipset` populated by tailing
-     CoreDNS's log. Simpler for v0.2.
-
-   v0.2 ships the iptables approach. Plugin is a v0.3+ refactor.
-
-5. **`box net`** inside the container reads the DNS log and shows recent queries +
-   resolution status, so you can debug "why can't I reach X."
+4. **Egress filtering** via iptables + ipset on the host. A per-project ipset
+   (`abx-<12hex>-a`) is populated by `agentbox-netfilter`, which tails
+   `podman logs --follow` of the CoreDNS sidecar and adds resolved IPs. An iptables
+   FORWARD DROP rule covers the agentbox network; traffic to IPs in the ipset is
+   ACCEPT'd. The netfilter binary runs on the host (not in a container), launched by
+   the CLI via `sudo -n agentbox-netfilter`.
+5. **`box net`** inside the container shows recent queries +
+   resolution status via `podman logs` of the sidecar, so you can debug "why can't I reach X."
 
 If `network.allowlist.allow` is empty, allowlist mode degrades to "DNS resolves nothing,
 egress blocked" — effectively the same as `off` but with the resolver wired up so error
@@ -356,7 +376,7 @@ the podman level.
 
 ## Nested containers (when the `containers` kit is in use)
 
-When `runtime.containers.enable = true`, the box has a working rootless podman inside it,
+When `containers.enable = true`, the box has a working rootless podman inside it,
 with `docker` aliased to it for ergonomics. The agent can run `docker compose up`, build
 images, and so on, without the box being `--privileged` and without mounting the host's
 docker socket.
@@ -403,7 +423,7 @@ Key properties:
   not on the host. Reach it with `agentbox exec . curl localhost:8080` from the host, or
   use a future `[runtime.ports]` knob.
 
-Without the `containers` kit (or with `runtime.containers.enable = false`), the box has
+Without the `containers` kit (or with `containers.enable = false`), the box has
 no nested container capability at all and the runtime spec is the strict default.
 
 ## In-box process model
@@ -445,7 +465,7 @@ left off.
 | `~/.ssh` permissions wrong inside box             | Host umask drifted                             | Fix on host; box re-reads next start |
 | `safe` mode: legitimate domain returns NXDOMAIN   | Threat feed false positive                     | Add to `network.safe.extra_allow`   |
 | `safe` mode: agent reaches sketchy host anyway    | Domain not in any feed yet                     | Switch to `allowlist` for this run  |
-| Inner `docker run` fails with mount/permission error | `runtime.containers.enable` is false        | Set true and `agentbox run --fresh` |
+| Inner `docker run` fails with mount/permission error | `containers.enable` is false        | Set true and `agentbox run --fresh` |
 | Inner container can't reach the internet          | Outer network policy is too tight              | Adjust `network.allowlist.allow` or switch to `safe` |
 
 `agentbox doctor` checks the runtime, the kit cache, mount source existence, and DNS

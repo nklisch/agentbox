@@ -263,24 +263,43 @@ Check that the system is set up correctly.
 agentbox doctor [flags]
 ```
 
-Checks:
+Checks (run in order; each prints `[OK]`, `[WARN]`, or `[FAIL]`):
 
-1. Runtime (`podman` or `docker`) is installed and reachable.
-2. On macOS: `podman machine` exists and is running (if runtime is podman).
-3. The configured `default_kits` image exists; offers to build if not.
-4. State directory exists and is writable.
-5. Network mode dependencies: for `safe`/`allowlist`, checks that iptables / netavark is
-   functional and that the CoreDNS sidecar image is available.
-6. Each running box's bind-mount sources still exist on the host.
+| # | Check name          | What it verifies                                                              |
+|---|---------------------|-------------------------------------------------------------------------------|
+| 1 | `runtime`           | `podman` or `docker` is on PATH and responds to `version`.                    |
+| 2 | `state-dir`         | `~/.local/share/agentbox/` exists and is writable.                           |
+| 3 | `iptables`          | (Linux) `iptables` is installed.                                              |
+| 4 | `ipset`             | (Linux) `ipset` is installed.                                                 |
+| 5 | `sudo-iptables`     | (Linux) Passwordless `sudo iptables` and `sudo ipset` work. Required for `safe`/`allowlist` modes. |
+| 6 | `coredns-image`     | `docker.io/coredns/coredns:1.14.3` is present locally.                       |
+| 7 | `containers-config` | WARN when `containers` kit is in `default_kits` but `containers.enable=false`. |
+| 8 | `podman-machine`    | (macOS) A `podman machine` is running.                                        |
+| 9 | `kit-cache`         | Cache JSON entries match real images in the podman image store.               |
+|10 | `mount-sources`     | Each running box's bind-mount sources still exist on the host.                |
 
-Each check prints `[OK]`, `[WARN]`, or `[FAIL]` with a short explanation. Exits 0 if all
-OK, 1 if any FAIL.
+Exits 0 if all checks pass, 1 if any check FAIL.
+
+**`--fix` semantics:** runs auto-remediation for checks that support it. Currently fixes:
+- `podman-machine` — starts the machine if stopped.
+- `coredns-image` — pulls `docker.io/coredns/coredns:1.14.3`.
+
+Other checks report the corrective action (e.g. the sudoers line to add) but don't modify
+the system. `--fix` is the first-run equivalent of `agentbox init` — no separate init
+command exists.
+
+**sudo requirement:** `safe` and `allowlist` modes need passwordless sudo for `iptables`,
+`ipset`, and `agentbox-netfilter`. Suggested sudoers entry:
+
+```
+ALL ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/local/bin/agentbox-netfilter
+```
 
 **Flags:**
 
 | Flag         | Behavior                                                       |
 | ------------ | -------------------------------------------------------------- |
-| `--fix`      | Attempt safe auto-remediation (e.g. start `podman machine`).   |
+| `--fix`      | Auto-remediate checks that support it (see above).             |
 | `--json`     | JSON output for scripting.                                     |
 
 ### `agentbox config`
@@ -372,7 +391,8 @@ recent queries (last 50):
   2026-05-04T15:10:14  evil-c2.example              → NXDOMAIN          BLOCKED (threat-feed)
 ```
 
-Reads from `/var/log/coredns/queries.log` (the CoreDNS sidecar log, mounted in).
+Reads recent queries via `podman logs` of the CoreDNS sidecar. CoreDNS 1.14.3's `log`
+plugin writes to container stdout only — there is no log file to mount.
 
 ### `box save`
 
