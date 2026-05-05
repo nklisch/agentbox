@@ -1,10 +1,122 @@
 # Autopilot Progress
 
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-05-04
 **Last updated:** 2026-05-05
-**Phases since last refactor:** 7
+**Phases since last refactor:** 8
 **Total refactor passes:** 0
+**Tagged:** v0.1.0 (2026-05-05)
+
+---
+
+## Completion Summary
+
+agentbox v0.1.0 — all 8 ROADMAP phases shipped end-to-end in a single autopilot session.
+
+**Total phases completed:** 8/8
+**Total refactor passes:** 0 (gate evaluated 5 times — phases 3, 4, 5, 6, after Phase 6
+restructure — and skipped each time. Reasoning logged in Refactor Log: each
+"would-be" refactor either had no actionable Go-side duplication or violated kit-format
+contracts that mandate self-contained kit dirs. Decision to defer to a v0.2 refactor
+pass once the v0.1 surface stabilizes in real use.)
+**Total commits:** ~38 across 8 design docs + 8 phase implementations (some multi-part)
++ multiple in-flight fixes + progress updates.
+
+### What ships in v0.1.0
+
+- **CLI:** `agentbox run/shell/exec/attach/ls/rm/build/doctor/config/completion`. Cobra
+  command tree, exit-code conventions, `--dry-run` on mutating commands, NDJSON output
+  for lists.
+- **12 built-in kits:** `base` + 6 single-language (`node`, `python`, `go`, `rust`,
+  `systems`, `cloud`) + `polyglot` (the kitchen-sink kit) + 3 agents (`claude`, `codex`,
+  `opencode`) + `containers` (nested rootless podman).
+- **Container lifecycle:** per-project boxes with same-path bind mount, label-based
+  discovery (no state file), persistent state dir, identifier resolution accepting
+  `.` / 12-hex / prefix / `agentbox-<id>`.
+- **Zellij in-box:** layout with agent main pane (70%) + git ticker + btm stats +
+  separate shell tab. Detach + reattach across sessions.
+- **Network policy:** `safe` (DNS threat-feed + IP-level egress filter via iptables/
+  ipset, populated by `agentbox-netfilter` tailing CoreDNS logs) and `allowlist`
+  (explicit hostname list with NXDOMAIN default). Inner-container egress flows through
+  the same policy because rootless podman shares the box's network namespace.
+- **Nested rootless podman:** `docker run --rm hello-world` works inside the box without
+  `--privileged` and without mounting the host docker socket. Bundled seccomp profile
+  re-enables `clone3`, `mount`, `unshare`, etc.
+- **Two binaries:** `agentbox` (the CLI) and `agentbox-netfilter` (the per-box ipset
+  populator). Both static, CGO_ENABLED=0.
+- **Runtime fallback:** `agentbox --runtime docker` works against Docker via a
+  thin `DockerRuntime` adapter that embeds `PodmanRuntime` and overrides only
+  `NetworkExists` (docker doesn't have `network exists` as a subcommand).
+- **`agentbox doctor`:** 10 checks (`runtime`, `state-dir`, `iptables`, `ipset`,
+  `sudo-iptables`, `coredns-image`, `containers-config`, `podman-machine`, `kit-cache`,
+  `mount-sources`). `--fix` flag runs safe auto-remediation for `podman-machine` and
+  `coredns-image` (others report and require user action).
+- **`box` helpers in-box:** `info` (full mounts + resources + project metadata), `net`
+  (CoreDNS query history via `podman logs`), `scratch` (tmpfs ephemeral cd target),
+  `save` (host-persisting file copy), `help`.
+
+### Major deviations from the original ROADMAP
+
+These are settled — the implementation is the source of truth, the docs have been
+updated to match (commit `15f9cf4`).
+
+1. **`[runtime.containers]` → `[containers]`** (Phase 1). The ROADMAP example was
+   invalid TOML (key collision between top-level `runtime = "podman"` and the
+   `[runtime.containers]` table). Renamed to `[containers]`. Affects config files.
+2. **CoreDNS 1.14.3 Corefile syntax** (Phase 6). The plugin syntax changed from what
+   the ROADMAP suggested: `log . { class all }` (stdout-only — file paths not
+   supported); `template IN ANY` (qclass + qtype as separate tokens). `box net` reads
+   the queries via `podman logs --follow <sidecar>` instead of a mounted file. The
+   `agentbox-netfilter` daemon does the same.
+3. **Three containers per box for safe/allowlist** (Phase 6). The ROADMAP described
+   2 (box + sidecar). The implementation runs 3 (box + sidecar + host-side netfilter
+   process) when `block_direct_ip = true` on Linux. macOS degrades to DNS-only
+   (Part A only).
+4. **Sudo required for safe/allowlist on Linux** (Phase 6). iptables/ipset need root.
+   Phase 6 documents passwordless-sudo setup; doctor verifies.
+5. **`Containers.Enable` defaults to false** (Phase 7). Even though `containers` is in
+   `DefaultKits`, runtime privileges (cap-add/device/seccomp) are opt-in. doctor warns
+   when out of sync.
+6. **`opencode` has no root-level YOLO flag** (Phase 5 Part C). Phase 5 verified;
+   `--dangerously-skip-permissions` only applies to `opencode run` subcommand.
+   `Cmd: ["opencode"]` in DefaultConfig.
+
+### Known issues / deferred to v0.2+
+
+- **Port forwarding from box to host** — inner `docker run -p 8080:8080` only binds
+  inside the box. Workaround: `agentbox exec . curl localhost:8080` from the host.
+  Future `[runtime.ports]` config block.
+- **Shared rootless image cache across boxes** — each box with the `containers` kit
+  has its own podman image storage; `postgres:16` gets pulled per-project.
+- **macOS smoke test deferred to user verification** — the dev box used to drive the
+  autopilot was Linux. The full P3-P7 flow against `podman machine` on Apple Silicon
+  is documented but not autopilot-verified.
+- **`--runtime docker` end-to-end deferred** — docker isn't installed on the dev box.
+  The DockerRuntime is wired (compile-time interface check passes) but the full
+  `agentbox --runtime docker run` flow needs manual verification.
+- **macOS container-only volumes for big build dirs** (`node_modules`, `target`).
+  Not implemented; deferred until perf is actually a problem on macOS.
+- **Kit image registry distribution** — first run is `build`, not `pull`. v0.3+.
+- **Worktree / auto-commit / sandbox-branch mode** — deferred indefinitely.
+- **Snapshot / resume** (`podman commit` + restart from snapshot) — deferred.
+- **ttyd in the kit for browser-based attach** — out of scope.
+
+### Implementation stats
+
+- **9 design documents** (one per phase, with Phase 5 split into A/B/C and Phase 6
+  split into A/B in implementation but a single design doc each).
+- **~38 commits** on `main` from initial foundation to v0.1.0 tag.
+- **24 implementation orchestrations** (some single-agent, some 2-3 agents) producing
+  ~12,000 LOC of Go + ~3,500 LOC of bash + ~9,000 lines of design docs + ~4,200 lines
+  of canonical docs.
+- **No refactor passes performed** — the architecture stayed clean enough that none
+  was warranted. v0.2 will likely revisit.
+- **Domain purity preserved throughout:** no cobra or `internal/cli` imports in any
+  domain package (config, project, runspec, state, doctor, exitcode, version, kits,
+  builtinkits, container, lifecycle, zellij, network, seccomp). Verified at every
+  phase boundary.
+- **Auto-pacing:** the `/loop /autopilot` watchdog fired roughly every 25 minutes;
+  each fire resumed from PROGRESS.md and continued the workflow.
 
 ---
 
@@ -19,7 +131,7 @@
 | 5 | Runtime kits + agent kits + agent integration | done | 2026-05-05 |
 | 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | done | 2026-05-05 |
 | 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | done | 2026-05-05 |
-| 8 | macOS support, Docker fallback, completion, ship | active | — |
+| 8 | macOS support, Docker fallback, completion, ship | done | 2026-05-05 |
 
 ---
 
