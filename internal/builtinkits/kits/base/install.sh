@@ -191,12 +191,14 @@ pip3 install --break-system-packages --no-cache-dir "tldr"
 rm -rf /var/lib/apt/lists/*
 
 # --- box helpers (copied from this kit's dir via $KIT_DIR) ---
-install -m 0755 "${KIT_DIR}/box"         /usr/local/bin/box
-install -m 0755 "${KIT_DIR}/box-info"    /usr/local/bin/box-info
-install -m 0755 "${KIT_DIR}/box-net"     /usr/local/bin/box-net
-install -m 0755 "${KIT_DIR}/box-scratch" /usr/local/bin/box-scratch
-install -m 0755 "${KIT_DIR}/box-save"    /usr/local/bin/box-save
-install -m 0755 "${KIT_DIR}/box-help"    /usr/local/bin/box-help
+install -m 0755 "${KIT_DIR}/box"            /usr/local/bin/box
+install -m 0755 "${KIT_DIR}/box-info"       /usr/local/bin/box-info
+install -m 0755 "${KIT_DIR}/box-net"        /usr/local/bin/box-net
+install -m 0755 "${KIT_DIR}/box-scratch"    /usr/local/bin/box-scratch
+install -m 0755 "${KIT_DIR}/box-save"       /usr/local/bin/box-save
+install -m 0755 "${KIT_DIR}/box-help"       /usr/local/bin/box-help
+install -m 0755 "${KIT_DIR}/box-agent"      /usr/local/bin/box-agent
+install -m 0755 "${KIT_DIR}/box-git-watch"  /usr/local/bin/box-git-watch
 
 # --- jgrep (gron-grep round-trip wrapper) ---
 # Lets agents grep into JSON without composing the gron pipeline by hand.

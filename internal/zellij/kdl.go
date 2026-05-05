@@ -58,20 +58,25 @@ func runLayout(l Layout) string {
 	fmt.Fprintln(&b, `    tab name="agentbox" focus=true {`)
 	fmt.Fprintln(&b, `        pane split_direction="horizontal" {`)
 
-	// Agent pane — 70% top.
+	// Agent pane — 70% top. Wrapped in `box-agent` so the pane drops into
+	// `zsh -l` after the agent exits (instead of leaving a dead pane or
+	// dumping to a bare /bin/sh). box-agent ships in the base kit.
 	fmt.Fprintln(&b, `            pane size="70%" name="agent" {`)
-	writeCommand(&b, "                ", l.AgentCmd)
+	agentCmd := l.AgentCmd
+	if len(agentCmd) > 0 {
+		agentCmd = append([]string{"box-agent"}, agentCmd...)
+	}
+	writeCommand(&b, "                ", agentCmd)
 	fmt.Fprintf(&b, "                cwd %q\n", l.ProjectAbs)
 	fmt.Fprintln(&b, `            }`)
 
-	// Bottom row — git ticker left, btm stats right.
+	// Bottom row — git dashboard left, btm stats right. The git pane runs
+	// `box-git-watch` (base kit) which renders branch + dirty files +
+	// recent commits with colors. --color preserves ANSI through `watch`.
 	fmt.Fprintln(&b, `            pane split_direction="vertical" size="30%" {`)
 	fmt.Fprintln(&b, `                pane name="git" {`)
 	fmt.Fprintln(&b, `                    command "watch"`)
-	// -sb: short format with branch header. The -b adds the
-	// "## main...origin/main [ahead N, behind M]" line; without it
-	// short-format hides the branch entirely.
-	fmt.Fprintln(&b, `                    args "-n" "2" "git" "status" "-sb"`)
+	fmt.Fprintln(&b, `                    args "--color" "-n" "2" "box-git-watch"`)
 	fmt.Fprintf(&b, "                    cwd %q\n", l.ProjectAbs)
 	fmt.Fprintln(&b, `                }`)
 	fmt.Fprintln(&b, `                pane name="stats" {`)

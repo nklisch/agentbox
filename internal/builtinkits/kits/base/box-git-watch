@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# box-git-watch — compact git dashboard for the zellij watch pane.
+# Run by `watch --color -n 2 box-git-watch` from the layout.
+#
+# Sections:
+#   • branch + tracking + dirty files (git status -sb, colored)
+#   • last 5 commits (oneline with refs)
+#
+# Designed for a narrow-ish pane; uses dim/bold ANSI section headers.
+
+set -u
+
+# Section header helper: dim + bold "── name ──".
+hdr() { printf '\033[1;2m── %s ──\033[0m\n' "$1"; }
+
+# Some watch invocations strip non-tty output; force color.
+hdr "branch"
+git -c color.status=always status -sb
+
+echo
+
+hdr "recent"
+git --no-pager log --color=always --oneline --decorate -5 2>/dev/null \
+    || echo "(no commits yet)"

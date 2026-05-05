@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# box-agent — run an agent command, then fall through to zsh -l so the
+# pane stays useful after the agent exits. Used by the zellij run-mode
+# layout for the agent pane.
+#
+# Usage: box-agent <cmd> [args...]
+#
+# Always execs into `zsh -l` at the end (regardless of the wrapped
+# command's exit code). If no command is given, drops directly into zsh.
+# Prints a one-line banner with the exit code so users can tell what
+# happened when the agent crashed or was Ctrl-C'd.
+
+if [ "$#" -gt 0 ]; then
+    "$@"
+    code=$?
+    printf '\n\033[2m── agent exited (code %d); dropping into zsh ──\033[0m\n' "$code"
+fi
+
+exec zsh -l
