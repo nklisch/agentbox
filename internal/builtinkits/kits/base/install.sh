@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Base kit installer: shell + modern CLI + zellij + box helpers.
 # All tool versions are pinned at the top for reproducible rebuilds.
-# Verified against GitHub releases on 2026-05-04.
+# Verified against GitHub releases on 2026-05-04 (gh + glab added 2026-05-05).
 
 set -euo pipefail
 
@@ -21,6 +21,8 @@ WATCHEXEC_VERSION="${WATCHEXEC_VERSION:-2.5.1}"  # watchexec/watchexec — versi
 YQ_VERSION="${YQ_VERSION:-4.53.2}"               # mikefarah/yq — single binary; Go arch suffix
 ZOXIDE_VERSION="${ZOXIDE_VERSION:-0.9.9}"        # ajeetdsouza/zoxide — musl only for linux; binary at archive root
 DELTA_VERSION="${DELTA_VERSION:-0.19.2}"         # dandavison/delta — not in Debian Bookworm; binary in versioned subdir
+GH_VERSION="${GH_VERSION:-2.92.0}"               # cli/cli — binary in {archive}/bin/gh; uses GO_ARCH (amd64/arm64)
+GLAB_VERSION="${GLAB_VERSION:-1.93.0}"           # gitlab-org/cli on GitLab — binary in bin/glab at archive root; uses GO_ARCH
 
 # --- Arch detection ---
 ARCH="$(uname -m)"
@@ -146,6 +148,24 @@ install -m 0755 "$TMP/delta-${DELTA_VERSION}-${RUST_TRIPLE}/delta" /usr/local/bi
 # Configure git to use delta as the pager when it's available.
 git config --system core.pager delta || true
 git config --system interactive.diffFilter "delta --color-only" || true
+
+# --- gh (GitHub CLI) ---
+# Archive name: gh_{VER}_linux_{GO_ARCH}.tar.gz
+# Binary lives at: gh_{VER}_linux_{GO_ARCH}/bin/gh
+# Also ships shell completions and man pages we don't bother installing.
+curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz" \
+  -o "$TMP/gh.tar.gz"
+tar -xzf "$TMP/gh.tar.gz" -C "$TMP"
+install -m 0755 "$TMP/gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh" /usr/local/bin/gh
+
+# --- glab (GitLab CLI) ---
+# Archive name: glab_{VER}_linux_{GO_ARCH}.tar.gz
+# Hosted on GitLab's release downloads endpoint (not GitHub).
+# Binary lives at: bin/glab at archive root (no top-level versioned dir).
+curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz" \
+  -o "$TMP/glab.tar.gz"
+tar -xzf "$TMP/glab.tar.gz" -C "$TMP"
+install -m 0755 "$TMP/bin/glab" /usr/local/bin/glab
 
 # --- httpie (pretty HTTP client) and tldr (community man pages) ---
 # pip3 packages — python3-pip is not in packages.txt because we want the

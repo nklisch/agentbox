@@ -352,6 +352,12 @@ sufficiently determined agent from misbehaving via legitimate channels.
 `jq`, `yq`, `htmlq`, `httpie` (`http` / `xh`), `dog`, `gron`, `hyperfine`, `tokei` /
 `scc`, `tealdeer` (`tldr`), `entr`, `watchexec`, `delta` (default git pager).
 
+### Forge clients
+
+`gh` (GitHub CLI) and `glab` (GitLab CLI). Both authenticate via the agent's normal
+flow (env tokens or `gh auth login` / `glab auth login`). Useful for `gh pr create`,
+`gh issue list`, `glab mr create`, etc., without leaving the box.
+
 ### Multiplexer
 
 `zellij` — bundled and used by `agentbox run`.
