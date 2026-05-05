@@ -85,7 +85,7 @@ pids   = 512
 [containers]
 # Enables nested rootless podman inside the box (for `docker run` / `compose` from
 # inside). Adds /dev/fuse and re-grants SETUID/SETGID. Pairs with the `containers` kit.
-enable        = false              # off by default; opt-in
+enable        = true               # on by default; set false to drop runtime privileges
 extra_devices = ["/dev/fuse"]
 extra_caps    = ["SETUID", "SETGID"]
 seccomp       = "containers"       # bundled looser profile name; or path; or "unconfined"

@@ -74,9 +74,11 @@ updated to match (commit `15f9cf4`).
    (Part A only).
 4. **Sudo required for safe/allowlist on Linux** (Phase 6). iptables/ipset need root.
    Phase 6 documents passwordless-sudo setup; doctor verifies.
-5. **`Containers.Enable` defaults to false** (Phase 7). Even though `containers` is in
-   `DefaultKits`, runtime privileges (cap-add/device/seccomp) are opt-in. doctor warns
-   when out of sync.
+5. **`Containers.Enable` defaults to true** (Phase 7, flipped post-v0.1.0). `containers`
+   is in `DefaultKits` and runtime privileges (cap-add/device/seccomp) ship on so that
+   nested `docker`/`podman` works out of the box. Set `[containers] enable = false` to
+   drop the relaxations; doctor warns when the kit is in `default_kits` but enable is
+   false.
 6. **`opencode` has no root-level YOLO flag** (Phase 5 Part C). Phase 5 verified;
    `--dangerously-skip-permissions` only applies to `opencode run` subcommand.
    `Cmd: ["opencode"]` in DefaultConfig.

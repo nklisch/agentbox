@@ -25,10 +25,10 @@ func TestDefaultConfig_NetworkMode(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig_ContainersDisabled(t *testing.T) {
+func TestDefaultConfig_ContainersEnabled(t *testing.T) {
 	cfg := config.DefaultConfig()
-	if cfg.Containers.Enable != false {
-		t.Error("DefaultConfig().Containers.Enable should be false")
+	if cfg.Containers.Enable != true {
+		t.Error("DefaultConfig().Containers.Enable should be true")
 	}
 }
 

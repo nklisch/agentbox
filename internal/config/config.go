@@ -115,7 +115,7 @@ func DefaultConfig() Config {
 			PIDs:   512,
 		},
 		Containers: Containers{
-			Enable:       false,
+			Enable:       true,
 			ExtraDevices: []string{"/dev/fuse"},
 			ExtraCaps:    []string{"SETUID", "SETGID"},
 			Seccomp:      "containers",
