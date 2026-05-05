@@ -68,7 +68,10 @@ func runLayout(l Layout) string {
 	fmt.Fprintln(&b, `            pane split_direction="vertical" size="30%" {`)
 	fmt.Fprintln(&b, `                pane name="git" {`)
 	fmt.Fprintln(&b, `                    command "watch"`)
-	fmt.Fprintln(&b, `                    args "-n" "2" "git" "status" "-s"`)
+	// -sb: short format with branch header. The -b adds the
+	// "## main...origin/main [ahead N, behind M]" line; without it
+	// short-format hides the branch entirely.
+	fmt.Fprintln(&b, `                    args "-n" "2" "git" "status" "-sb"`)
 	fmt.Fprintf(&b, "                    cwd %q\n", l.ProjectAbs)
 	fmt.Fprintln(&b, `                }`)
 	fmt.Fprintln(&b, `                pane name="stats" {`)
