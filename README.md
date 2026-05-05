@@ -318,13 +318,26 @@ containers because rootless podman shares the box's network namespace.
 
 ## Shell completion
 
+User-level paths — no sudo:
+
 ```sh
-agentbox completion zsh > ~/.zsh/completions/_agentbox     # zsh
-agentbox completion bash > /etc/bash_completion.d/agentbox # bash
+# bash (auto-loaded from the XDG path by bash-completion 2.x)
+mkdir -p ~/.local/share/bash-completion/completions
+agentbox completion bash > ~/.local/share/bash-completion/completions/agentbox
+
+# zsh (the dir must be on $fpath; add `fpath=(~/.zsh/completions $fpath)` to .zshrc)
+mkdir -p ~/.zsh/completions
+agentbox completion zsh > ~/.zsh/completions/_agentbox
+
+# fish
+mkdir -p ~/.config/fish/completions
 agentbox completion fish > ~/.config/fish/completions/agentbox.fish
 ```
 
-Then re-source your shell config or open a new shell.
+Open a new shell to pick up the completions. If you'd rather install
+system-wide, the corresponding paths are `/etc/bash_completion.d/`,
+`/usr/share/zsh/site-functions/`, and `/usr/share/fish/vendor_completions.d/`
+— each requires sudo.
 
 ---
 
