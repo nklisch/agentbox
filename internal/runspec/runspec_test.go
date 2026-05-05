@@ -346,9 +346,10 @@ func TestBuildPodmanCreateArgs_EnvVars(t *testing.T) {
 			t.Errorf("EnvVars[%q] = %q, want %q", key, got, want)
 		}
 	}
-	// AGENTBOX_SAVED_DIR should end in /saved
-	if v := kvMap["AGENTBOX_SAVED_DIR"]; !strings.HasSuffix(v, "/saved") {
-		t.Errorf("AGENTBOX_SAVED_DIR %q does not end in '/saved'", v)
+	// AGENTBOX_SAVED_DIR is the in-container mount target (not the host path),
+	// so box-save inside the container can resolve it to the bind-mounted dir.
+	if v, want := kvMap["AGENTBOX_SAVED_DIR"], "/root/.local/share/agentbox-saved"; v != want {
+		t.Errorf("AGENTBOX_SAVED_DIR = %q, want %q", v, want)
 	}
 	// AGENTBOX_CREATED should be RFC3339
 	if v := kvMap["AGENTBOX_CREATED"]; v == "" {

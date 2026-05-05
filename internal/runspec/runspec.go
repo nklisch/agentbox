@@ -119,7 +119,9 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		{Key: "AGENTBOX_KIT_IMAGE", Value: args.Image},
 		{Key: "AGENTBOX_NETWORK", Value: cfg.Network.Mode},
 		{Key: "AGENTBOX_CREATED", Value: in.Created.UTC().Format(time.RFC3339)},
-		{Key: "AGENTBOX_SAVED_DIR", Value: in.StateDir + "/saved"},
+		// In-container path; bind-mounts to <state-dir>/saved on the host.
+		// Must match the saved/ Mount Target below.
+		{Key: "AGENTBOX_SAVED_DIR", Value: "/root/.local/share/agentbox-saved"},
 	}
 
 	// Same-path project mount (non-negotiable per CLAUDE.md).
