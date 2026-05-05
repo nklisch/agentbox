@@ -2,8 +2,8 @@
 
 **Status:** in-progress
 **Started:** 2026-05-04
-**Last updated:** 2026-05-04
-**Phases since last refactor:** 0
+**Last updated:** 2026-05-05
+**Phases since last refactor:** 1
 **Total refactor passes:** 0
 
 ---
@@ -12,8 +12,8 @@
 
 | # | Phase | Status | Completed |
 |---|-------|--------|-----------|
-| 1 | CLI scaffold, config loading, dry-run | active | — |
-| 2 | Kit pipeline, base kit, `agentbox build` | pending | — |
+| 1 | CLI scaffold, config loading, dry-run | done | 2026-05-05 |
+| 2 | Kit pipeline, base kit, `agentbox build` | active | — |
 | 3 | Container lifecycle — run / shell / exec / attach / ls / rm | pending | — |
 | 4 | Zellij-in-box, layout generation, `box` helpers | pending | — |
 | 5 | Runtime kits + agent kits + agent integration | pending | — |
@@ -25,7 +25,28 @@
 
 ## Refactor Log
 
-(none yet)
+(none yet — phases_since_refactor=1, default trigger is every 3 phases)
+
+---
+
+## Phase 1 Notes
+
+What's now possible that wasn't before:
+- `agentbox` is a real binary. It boots, parses cobra args, loads merged TOML config.
+- `agentbox config show/edit/path` works end-to-end with `--json`, `--global`, `--project`.
+- `agentbox run --dry-run` produces a fully-formed `podman create` invocation with the
+  same-path bind mount, full label schema, secrets passed by name only, and `--cap-drop
+  ALL --security-opt no-new-privileges`. Other phases will plug in real podman calls.
+- `agentbox doctor` reports runtime + state-dir health.
+- All exit codes from CLI.md are wired (0/1/2/3 today, 4/5/6/7 reserved as constants).
+- Domain layer (config, project, runspec, state, doctor, exitcode, version) is
+  cobra-free and fully unit-tested. Future agents can build on this without leaking
+  the CLI library into the domain.
+
+Implementation stats:
+- 2 Sonnet agents, sequential (foundation → CLI/main).
+- 17 Go source files + 5 test files + Makefile + go.mod/go.sum + .gitignore.
+- 3 commits on `main`: `7c29c3f` foundation, `ecb2a75` CLI+main.
 
 ---
 
@@ -42,6 +63,18 @@
 - **Chose:** `github.com/nklisch/agentbox`.
 - **Alternative:** plain `agentbox` (no domain prefix).
 - **Reasoning:** The user's email is `nklisch@gmail.com` and personal GitHub is the most likely future remote per VISION.md framing ("Not for distribution… If it spreads, fine"). Domain-style paths are also less awkward when introducing internal sub-packages later.
+
+### Phase 1: cobra version — pinned via `@latest` at install time, resolved to v1.10.2
+- **Context:** Design didn't pin a specific cobra version; agent had to pick at `go get` time.
+- **Chose:** Whatever `@latest` resolved to (v1.10.2 at time of install).
+- **Alternative:** Pin to a known-good older release.
+- **Reasoning:** Cobra's API has been stable for years and the design's API usage (`MarkFlagsMutuallyExclusive`, `MatchAll`, completion generators) all matched current API exactly. Pinning later via `go.sum` is automatic.
+
+### Phase 1: `.gitignore` pattern shape — root-anchored
+- **Context:** Initial `.gitignore` from Agent 1 had `agentbox` (unanchored), which would also match `cmd/agentbox/` source directory and prevent it from being staged.
+- **Chose:** `/agentbox` (root-anchored).
+- **Alternative:** `agentbox` (would have blocked the source dir).
+- **Reasoning:** Convention for Go binaries — only the root-level binary should be ignored, not anything else with the same name. Agent 2 caught this and fixed it before committing.
 
 ---
 
