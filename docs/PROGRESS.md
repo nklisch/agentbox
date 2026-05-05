@@ -43,6 +43,12 @@
 - **Decision:** Skip. Wait for Phase 6 (network policy — CoreDNS + iptables + custom podman network) to re-evaluate. Phase 6 introduces fundamentally new infrastructure; if patterns repeat with Phase 7's `containers` kit work, refactor that round.
 - **Counter NOT reset.** phases_since_refactor stays at 5. Next gate at 6.
 
+### After Phase 6: gate triggered, refactor skipped (fourth time)
+- **Trigger:** phases_since_refactor=6.
+- **Investigation:** Phase 6 added the `internal/network` package + `cmd/agentbox-netfilter` standalone binary. The `runFn` injection pattern in IPTables mirrors the existing `os/exec` + `errors.As` patterns in `internal/kits/podman.go` and `internal/container/podman.go` — three places now using the same shape. Could extract a shared "shell-out helper" but each call site interprets `*exec.ExitError` differently (image-absent vs. container-missing vs. ipset-already-exists vs. network-not-found etc.). The pattern is *consistent*, not *duplicated*. `internal/network/manager.go` grew Setup/Teardown but each method is still readable. `doctor.go` grew with 4 new Linux-only checks; each is small and self-contained.
+- **Decision:** Skip. Phase 7 introduces the containers kit (nested rootless podman) which is mostly content + a small runtime-spec tweak — won't introduce new patterns. **The natural moment to refactor is after Phase 8 ships**, when the full system is in place and we can see the architecture as a whole. Bumping cadence to "after roadmap completes" rather than continuing to fire per-phase.
+- **Counter NOT reset** — keep at 6 as a marker. The Phase 8 final pass will include a refactor evaluation by default.
+
 ---
 
 ## Phase 5 Part A Notes
