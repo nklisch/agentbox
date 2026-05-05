@@ -16,7 +16,7 @@
 | 2 | Kit pipeline, base kit, `agentbox build` | done | 2026-05-05 |
 | 3 | Container lifecycle — run / shell / exec / attach / ls / rm | done | 2026-05-05 |
 | 4 | Zellij-in-box, layout generation, `box` helpers | done | 2026-05-05 |
-| 5 | Runtime kits + agent kits + agent integration | active | — |
+| 5 | Runtime kits + agent kits + agent integration | active (Part A done) | — |
 | 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | pending | — |
 | 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | pending | — |
 | 8 | macOS support, Docker fallback, completion, ship | pending | — |
@@ -36,6 +36,51 @@
 - **Investigation:** Phase 4 added one new package (`internal/zellij`) — pure string output, no duplication with existing code. Lifecycle grew Run/Shell/Attach into zellij paths but they share `zellijAttach` already. `box-info` script bash growth (~80 LOC) is a single-file concern, not library duplication. `runspec` env-vars list is now 8 entries; could be tabularized but currently readable.
 - **Decision:** Skip. Wait for Phase 5 to re-evaluate; Phase 5 ships ~10 kits and may surface real patterns worth extracting (kit-install-helpers, version-pinning conventions, etc.).
 - **Counter NOT reset.** phases_since_refactor stays at 4. Next gate fires at 5 (Phase 5's own gate, as designed).
+
+---
+
+## Phase 5 Part A Notes
+
+What's now possible that wasn't before:
+- `agentbox build node|python|go|rust|systems|cloud` — six new built-in kits
+  build to working images. Each ships a focused language environment with
+  modern tooling.
+- All tool versions verified against upstream release APIs at write time
+  (per CLAUDE.md "stale data" rule). Pinned versions are env-var overridable
+  in each install.sh so users can bump independently.
+
+Pinned versions (verified 2026-05-05):
+- node: Node LTS major 24, current 25 (via `n`); bun 1.3.13, deno 2.7.14;
+  pnpm + yarn via corepack
+- python: uv 0.11.9, ruff 0.15.12, pyenv 2.6.28
+- go: Go 1.26.2; gopls @latest; golangci-lint 2.12.1; delve 1.26.3
+- rust: rustup bootstrapper; toolchains stable + nightly (channel names
+  intentional, not point-pinned); cargo-watch 8.5.3, sccache 0.15.0
+- systems: all from apt (Bookworm)
+- cloud: aws-cli 2.34.42, gcloud 566.0.0 (apt), az 2.86.0 (apt),
+  terraform 1.15.1, kubectl 1.36.0, helm 4.1.4
+
+Image sizes after build (rough):
+- python 814MB, go 1.39GB, node 1.27GB, systems 1.54GB, rust 2.22GB,
+  cloud 2.31GB.
+
+Structural fix landed alongside Part A:
+- **base kit now bridges env.d into zsh.** Phase 2's Dockerfile generator
+  wires env.d sourcing only into `/etc/profile.d/agentbox.sh` (bash login
+  shells), but zsh (the agentbox default) doesn't read /etc/profile.d.
+  Each Phase 5 Part A kit added the bridge to `/etc/zsh/zshenv` per-kit;
+  base now provides it once for everyone. Idempotent guards prevent
+  double-append. Commit `18473b1`.
+
+Implementation stats:
+- 1 Sonnet agent for all 6 kits (sequential within agent: systems first,
+  then go, python, node, rust, cloud).
+- 24 kit content files + 1 small structural fix to base.
+- Plus `libatomic1` added to node/packages.txt (Node 25 runtime dep).
+- Commits: design (`0da7a15`), Part A impl (`870f6a0`), zshenv fix
+  (`18473b1`).
+
+Parts B and C of Phase 5 remain (polyglot + agent kits).
 
 ---
 
