@@ -355,8 +355,10 @@ func TestBuildPodmanCreateArgs_EnvVars(t *testing.T) {
 	if v := kvMap["AGENTBOX_CREATED"]; v == "" {
 		t.Errorf("AGENTBOX_CREATED is empty")
 	}
-	if len(args.EnvVars) != 8 {
-		t.Errorf("expected 8 EnvVars, got %d", len(args.EnvVars))
+	// 8 base + IS_SANDBOX (claude-only workaround for the root refusal of
+	// --dangerously-skip-permissions).
+	if len(args.EnvVars) != 9 {
+		t.Errorf("expected 9 EnvVars (8 base + IS_SANDBOX for claude), got %d", len(args.EnvVars))
 	}
 }
 
@@ -516,7 +518,6 @@ func TestBuildPodmanCreateArgs_RoleLabel(t *testing.T) {
 }
 
 func TestBuildPodmanCreateArgs_EnvVars_CountUpdated(t *testing.T) {
-	// The agentbox.role label was added — update env var count test.
 	cfg := config.DefaultConfig()
 	in := defaultInput()
 
@@ -524,9 +525,86 @@ func TestBuildPodmanCreateArgs_EnvVars_CountUpdated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
 	}
-	// 8 env vars defined in runspec (unchanged by Phase 6 additions to labels)
-	if len(args.EnvVars) != 8 {
-		t.Errorf("expected 8 EnvVars, got %d: %+v", len(args.EnvVars), args.EnvVars)
+	// 8 base AGENTBOX_* + IS_SANDBOX for claude (v0.2.1).
+	if len(args.EnvVars) != 9 {
+		t.Errorf("expected 9 EnvVars, got %d: %+v", len(args.EnvVars), args.EnvVars)
+	}
+}
+
+// ---- v0.2.1: Claude Code root-refusal + ~/.claude.json mount fixes ----
+
+func TestBuildPodmanCreateArgs_ClaudeIsSandboxEnv(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput() // Agent: "claude"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	found := false
+	for _, kv := range args.EnvVars {
+		if kv.Key == "IS_SANDBOX" && kv.Value == "1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected IS_SANDBOX=1 in EnvVars when agent is claude")
+	}
+}
+
+func TestBuildPodmanCreateArgs_NonClaudeNoIsSandbox(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.Agent = "codex"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	for _, kv := range args.EnvVars {
+		if kv.Key == "IS_SANDBOX" {
+			t.Errorf("IS_SANDBOX should not be set for agent %q, got %q", in.Agent, kv.Value)
+		}
+	}
+}
+
+func TestBuildPodmanCreateArgs_ClaudeJSONMount(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput() // Agent: "claude", HomeDir: "/home/user"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	found := false
+	for _, m := range args.Mounts {
+		if m.Source == "/home/user/.claude.json" &&
+			m.Target == "/root/.claude.json" &&
+			m.Mode == "rw" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ~/.claude.json mount for claude agent, mounts: %+v", args.Mounts)
+	}
+}
+
+func TestBuildPodmanCreateArgs_NonClaudeNoJSONMount(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.Agent = "codex"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	for _, m := range args.Mounts {
+		if strings.HasSuffix(m.Source, ".claude.json") {
+			t.Errorf("non-claude agent %q should not get .claude.json mount, got: %+v",
+				in.Agent, m)
+		}
 	}
 }
 

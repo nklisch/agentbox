@@ -120,6 +120,7 @@ absolute paths in tooling output all match the host.
 | `~/.gitconfig`            | rw   | `~/.gitconfig`                | `/root/.gitconfig`           | If `mounts.gitconfig = true`.        |
 | `~/.ssh`                  | ro   | `~/.ssh`                      | `/root/.ssh`                 | RO only. Writable is rejected.       |
 | Agent config              | rw   | e.g. `~/.claude`              | e.g. `/root/.claude`         | Per `[mounts.agent_configs]`.        |
+| Claude sibling JSON       | rw   | `~/.claude.json`              | `/root/.claude.json`         | Auto-mounted only when `agent = claude`. Lifecycle touches the source file empty if missing so podman doesn't bind-mount a directory. |
 | Shell history             | rw   | session state `history` file  | `/root/.local/share/agentbox-history` | Persists across box recreation. |
 | Layout                    | ro   | session state `layout.kdl`    | `/etc/agentbox/layout.kdl`   | Generated per session.               |
 | Effective config          | ro   | session state `effective-config.toml` | `/etc/agentbox/config.toml` | For in-box `box info`.       |
@@ -189,6 +190,8 @@ podman create \
   -v "${HOME}/.gitconfig:/root/.gitconfig:rw" \
   -v "${HOME}/.ssh:/root/.ssh:ro" \
   -v "${HOME}/.claude:/root/.claude:rw" \
+  -v "${HOME}/.claude.json:/root/.claude.json:rw" \
+  -e IS_SANDBOX=1 \
   -v "${STATE_DIR}/history:/root/.local/share/agentbox-history:rw" \
   -v "${STATE_DIR}/layout.kdl:/etc/agentbox/layout.kdl:ro" \
   -v "${STATE_DIR}/effective-config.toml:/etc/agentbox/config.toml:ro" \
@@ -216,6 +219,19 @@ container start.
 - **Env vars by name.** Host env is the source of truth. CLI never reads or logs values.
 - **Labels are the source of truth.** No state file required for `agentbox ls`. Loss of the
   state directory doesn't lose track of containers.
+
+### Conditional flags (claude agent)
+
+When `agent = claude`, the CLI also appends:
+
+```
+-v "${HOME}/.claude.json:/root/.claude.json:rw"   # sibling-file state (touched empty if missing)
+-e IS_SANDBOX=1                                   # bypass Claude Code's root-refusal of --dangerously-skip-permissions
+```
+
+`IS_SANDBOX=1` is an undocumented bypass per
+[anthropics/claude-code#9184](https://github.com/anthropics/claude-code/issues/9184).
+Verified against `@anthropic-ai/claude-code@2.x` as of 2026-05-05.
 
 ### Conditional flags (nested containers)
 

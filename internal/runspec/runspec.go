@@ -131,6 +131,15 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		// Must match the saved/ Mount Target below.
 		{Key: "AGENTBOX_SAVED_DIR", Value: "/root/.local/share/agentbox-saved"},
 	}
+	// Claude Code refuses --dangerously-skip-permissions when whoami==root
+	// (anthropics/claude-code#9184). agentbox boxes run as root by design
+	// (rootless podman maps container-root to the host user). IS_SANDBOX=1 is
+	// the community-known undocumented bypass; verified against
+	// @anthropic-ai/claude-code@2.x as of 2026-05-05. May break in future
+	// releases — re-verify if claude exits with that error message.
+	if in.Agent == "claude" {
+		args.EnvVars = append(args.EnvVars, KV{Key: "IS_SANDBOX", Value: "1"})
+	}
 
 	// Same-path project mount (non-negotiable per CLAUDE.md).
 	args.Mounts = []Mount{
@@ -156,6 +165,19 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		args.Mounts = append(args.Mounts, Mount{
 			Source: expanded,
 			Target: "/root/." + in.Agent,
+			Mode:   "rw",
+		})
+	}
+	// Claude Code stores state in two places: the directory ~/.claude/
+	// (settings, plugins) AND the sibling file ~/.claude.json (project
+	// memories, MCP servers, machine ID). AgentConfigs above mounts the
+	// directory; mount the sibling file too so first-run state persists.
+	// Lifecycle touches the source path before podman create if it's missing
+	// (otherwise podman would create it as a directory).
+	if in.Agent == "claude" && in.HomeDir != "" {
+		args.Mounts = append(args.Mounts, Mount{
+			Source: in.HomeDir + "/.claude.json",
+			Target: "/root/.claude.json",
 			Mode:   "rw",
 		})
 	}
