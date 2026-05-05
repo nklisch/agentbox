@@ -1,12 +1,17 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 
 	"github.com/nklisch/agentbox/internal/config"
+	"github.com/nklisch/agentbox/internal/kits"
 	"github.com/nklisch/agentbox/internal/network"
 	"github.com/nklisch/agentbox/internal/state"
 )
@@ -22,9 +27,10 @@ const (
 
 // Check is a single doctor check.
 type Check struct {
-	Name    string `json:"name"`
-	Status  Status `json:"status"`
-	Message string `json:"message"`
+	Name    string       `json:"name"`
+	Status  Status       `json:"status"`
+	Message string       `json:"message"`
+	Fix     func() error `json:"-"` // optional remediation; called when --fix is set
 }
 
 // Result aggregates all checks and a summary.
@@ -42,6 +48,25 @@ func (r Result) AnyFail() bool {
 	return false
 }
 
+// ApplyFixes calls Fix() on every check that has one and is currently FAIL or
+// WARN. Returns the list of check names whose Fix was attempted, plus the first
+// error encountered (continues after errors so all fixes get a chance to run).
+func (r Result) ApplyFixes() (attempted []string, firstErr error) {
+	for _, c := range r.Checks {
+		if c.Fix == nil {
+			continue
+		}
+		if c.Status != StatusFail && c.Status != StatusWarn {
+			continue
+		}
+		attempted = append(attempted, c.Name)
+		if err := c.Fix(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return attempted, firstErr
+}
+
 // Run executes all checks and returns the aggregated result.
 func Run(cfg config.Config) Result {
 	checks := []Check{
@@ -52,6 +77,9 @@ func Run(cfg config.Config) Result {
 		sudoCheck(),
 		corednsImageCheck(cfg.Runtime),
 		containersConfigCheck(cfg),
+		podmanMachineCheck(),
+		kitCacheHealthCheck(cfg.Runtime),
+		mountSourcesCheck(cfg.Runtime),
 	}
 	return Result{Checks: checks}
 }
@@ -181,16 +209,151 @@ func containersConfigCheck(cfg config.Config) Check {
 // corednsImageCheck verifies that the pinned CoreDNS image is already pulled.
 // If absent, it warns with the pull command (not a hard failure — the image
 // will be pulled lazily on first `agentbox run` with safe/allowlist mode).
+// When --fix is set, the Fix closure pulls the image automatically.
 func corednsImageCheck(runtimeBin string) Check {
 	const name = "coredns-image"
 	if runtimeBin == "" {
 		runtimeBin = "podman"
 	}
+	bin := runtimeBin // capture for closure
 	cmd := exec.Command(runtimeBin, "image", "exists", network.CoreDNSImage)
 	if err := cmd.Run(); err != nil {
-		return Check{Name: name, Status: StatusWarn,
-			Message: fmt.Sprintf("%s not pulled yet; run: %s pull %s",
-				network.CoreDNSImage, runtimeBin, network.CoreDNSImage)}
+		return Check{
+			Name:    name,
+			Status:  StatusWarn,
+			Message: fmt.Sprintf("%s not pulled yet; run: %s pull %s", network.CoreDNSImage, runtimeBin, network.CoreDNSImage),
+			Fix: func() error {
+				return exec.Command(bin, "pull", network.CoreDNSImage).Run()
+			},
+		}
 	}
 	return Check{Name: name, Status: StatusOK, Message: network.CoreDNSImage + " present"}
+}
+
+// podmanMachineCheck verifies that a podman machine is running on macOS.
+// On Linux, podman runs natively so no machine is needed — returns OK with
+// a "skipped on Linux" message. Never returns FAIL on the wrong platform.
+func podmanMachineCheck() Check {
+	const name = "podman-machine"
+	if runtime.GOOS != "darwin" {
+		return Check{Name: name, Status: StatusOK, Message: "skipped on Linux"}
+	}
+	cmd := exec.Command("podman", "machine", "list", "--format", "{{.Running}}")
+	out, err := cmd.Output()
+	if err != nil {
+		return Check{
+			Name:    name,
+			Status:  StatusFail,
+			Message: "podman not installed or unable to list machines: " + err.Error(),
+			Fix: func() error {
+				// Try start first; if it fails because there's no machine, init first.
+				if err := exec.Command("podman", "machine", "start").Run(); err == nil {
+					return nil
+				}
+				// Ignore "already exists" errors from init.
+				_ = exec.Command("podman", "machine", "init").Run()
+				return exec.Command("podman", "machine", "start").Run()
+			},
+		}
+	}
+	// out contains one line per machine: "true" if running, "false" if stopped.
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "true" {
+			return Check{Name: name, Status: StatusOK, Message: "podman machine running"}
+		}
+	}
+	return Check{
+		Name:    name,
+		Status:  StatusWarn,
+		Message: "no running podman machine; agentbox containers will fail to start. Run `podman machine start` (or `agentbox doctor --fix`).",
+		Fix: func() error {
+			return exec.Command("podman", "machine", "start").Run()
+		},
+	}
+}
+
+// kitCacheHealthCheck compares cache JSON entries against actual container
+// images. Warns if the cache references images that no longer exist (user
+// pruned externally) — `agentbox build` will rebuild on next run.
+func kitCacheHealthCheck(runtimeBin string) Check {
+	const name = "kit-cache"
+	if runtimeBin == "" {
+		runtimeBin = "podman"
+	}
+	cache, err := kits.NewCache()
+	if err != nil {
+		return Check{Name: name, Status: StatusFail,
+			Message: "kit cache unreachable: " + err.Error()}
+	}
+	entries, err := cache.ListEntries()
+	if err != nil {
+		return Check{Name: name, Status: StatusWarn,
+			Message: "kit cache list error: " + err.Error()}
+	}
+	if len(entries) == 0 {
+		return Check{Name: name, Status: StatusOK,
+			Message: "kit cache empty (no kits built yet)"}
+	}
+	var stale []string
+	for _, e := range entries {
+		cmd := exec.Command(runtimeBin, "image", "inspect", e.Tag)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		if cmd.Run() != nil {
+			stale = append(stale, e.Tag)
+		}
+	}
+	if len(stale) == 0 {
+		return Check{Name: name, Status: StatusOK,
+			Message: fmt.Sprintf("%d cached kits, all images present", len(entries))}
+	}
+	return Check{Name: name, Status: StatusWarn,
+		Message: fmt.Sprintf("%d cached kits reference %d missing images: %s. Run `agentbox build --no-cache <kit>` to rebuild.",
+			len(entries), len(stale), strings.Join(stale, ", "))}
+}
+
+// mountSourcesCheck verifies that bind-mount sources for all agentbox-labeled
+// containers still exist on the host. Warns if any source directory was deleted
+// after the box was created.
+func mountSourcesCheck(runtimeBin string) Check {
+	const name = "mount-sources"
+	if runtimeBin == "" {
+		runtimeBin = "podman"
+	}
+	cmd := exec.Command(runtimeBin, "ps", "-a",
+		"--filter", "label=agentbox.role=box",
+		"--format", "{{.Names}}")
+	out, err := cmd.Output()
+	if err != nil {
+		return Check{Name: name, Status: StatusOK,
+			Message: "no running boxes (or runtime unreachable)"}
+	}
+	names := strings.Fields(strings.TrimSpace(string(out)))
+	if len(names) == 0 {
+		return Check{Name: name, Status: StatusOK, Message: "no running boxes"}
+	}
+
+	var missing []string
+	for _, cname := range names {
+		icmd := exec.Command(runtimeBin, "inspect", cname,
+			"--format", "{{range .Mounts}}{{.Source}}\n{{end}}")
+		iout, err := icmd.Output()
+		if err != nil {
+			continue
+		}
+		for _, src := range strings.Split(strings.TrimSpace(string(iout)), "\n") {
+			if src == "" {
+				continue
+			}
+			if _, err := os.Stat(src); errors.Is(err, fs.ErrNotExist) {
+				missing = append(missing, fmt.Sprintf("%s: %s", cname, src))
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return Check{Name: name, Status: StatusOK,
+			Message: fmt.Sprintf("all bind-mount sources present (%d boxes)", len(names))}
+	}
+	return Check{Name: name, Status: StatusWarn,
+		Message: fmt.Sprintf("%d missing mount sources: %s", len(missing), strings.Join(missing, "; "))}
 }

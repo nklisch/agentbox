@@ -18,7 +18,14 @@ import (
 // without invoking podman. Tests override this package-level var.
 var newLifecycle = func(cfg config.Config) (*lifecycle.Lifecycle, error) {
 	home, _ := os.UserHomeDir()
-	rt := container.NewPodmanRuntime(cfg.Runtime)
+
+	var rt container.Runtime
+	switch cfg.Runtime {
+	case "docker":
+		rt = container.NewDockerRuntime()
+	default: // podman is the default; also handles explicit "podman"
+		rt = container.NewPodmanRuntime(cfg.Runtime)
+	}
 
 	cfgDir, _ := os.UserConfigDir()
 	userKitsDir := filepath.Join(cfgDir, "agentbox", "kits")

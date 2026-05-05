@@ -13,3 +13,8 @@ func SetLifecycleFactory(fn func(config.Config) (*lifecycle.Lifecycle, error)) f
 	newLifecycle = fn
 	return func() { newLifecycle = orig }
 }
+
+// NewLifecycle exposes the real newLifecycle factory for type-dispatch tests.
+func NewLifecycle(cfg config.Config) (*lifecycle.Lifecycle, error) {
+	return newLifecycle(cfg)
+}

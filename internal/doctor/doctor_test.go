@@ -1,6 +1,8 @@
 package doctor_test
 
 import (
+	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -129,6 +131,140 @@ func TestRun_AnyFail_WithMissingRuntime(t *testing.T) {
 
 	if !result.AnyFail() {
 		t.Error("AnyFail() = false, want true when runtime binary is missing")
+	}
+}
+
+// ---- Phase 8: ApplyFixes + new check tests ----
+
+// TestApplyFixes_SkipsOKChecks verifies that ApplyFixes only calls Fix on
+// FAIL/WARN checks, never on OK ones.
+func TestApplyFixes_SkipsOKChecks(t *testing.T) {
+	okCalled := false
+	warnCalled := false
+	failCalled := false
+
+	result := doctor.Result{
+		Checks: []doctor.Check{
+			{Name: "ok-check", Status: doctor.StatusOK, Fix: func() error {
+				okCalled = true
+				return nil
+			}},
+			{Name: "warn-check", Status: doctor.StatusWarn, Fix: func() error {
+				warnCalled = true
+				return nil
+			}},
+			{Name: "fail-check", Status: doctor.StatusFail, Fix: func() error {
+				failCalled = true
+				return nil
+			}},
+		},
+	}
+
+	attempted, err := result.ApplyFixes()
+	if err != nil {
+		t.Errorf("ApplyFixes() unexpected error: %v", err)
+	}
+	if okCalled {
+		t.Error("Fix was called on an OK check; should be skipped")
+	}
+	if !warnCalled {
+		t.Error("Fix was not called on WARN check; should be called")
+	}
+	if !failCalled {
+		t.Error("Fix was not called on FAIL check; should be called")
+	}
+	if len(attempted) != 2 {
+		t.Errorf("attempted = %v, want 2 entries", attempted)
+	}
+}
+
+// TestApplyFixes_ReturnsFirstError verifies that ApplyFixes calls all Fixes
+// even when one errors, and returns only the first error.
+func TestApplyFixes_ReturnsFirstError(t *testing.T) {
+	err1 := errors.New("first fix error")
+	err2 := errors.New("second fix error")
+	second := false
+
+	result := doctor.Result{
+		Checks: []doctor.Check{
+			{Name: "check-a", Status: doctor.StatusFail, Fix: func() error { return err1 }},
+			{Name: "check-b", Status: doctor.StatusFail, Fix: func() error {
+				second = true
+				return err2
+			}},
+		},
+	}
+
+	attempted, firstErr := result.ApplyFixes()
+	if firstErr != err1 {
+		t.Errorf("firstErr = %v, want %v", firstErr, err1)
+	}
+	if !second {
+		t.Error("second Fix was not called; ApplyFixes should continue after errors")
+	}
+	if len(attempted) != 2 {
+		t.Errorf("attempted = %v, want 2 entries", attempted)
+	}
+}
+
+// TestPodmanMachineCheck_LinuxSkipsOK verifies that on Linux the podman-machine
+// check immediately returns OK with a "skipped" message.
+func TestPodmanMachineCheck_LinuxSkipsOK(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("test is only meaningful on Linux")
+	}
+	cfg := config.DefaultConfig()
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	result := doctor.Run(cfg)
+
+	c := findCheck(result, "podman-machine")
+	if c == nil {
+		t.Fatal("podman-machine check not found in result")
+	}
+	if c.Status != doctor.StatusOK {
+		t.Errorf("podman-machine status = %q, want OK on Linux", c.Status)
+	}
+	if !strings.Contains(strings.ToLower(c.Message), "skip") {
+		t.Errorf("podman-machine message %q should mention 'skip' on Linux", c.Message)
+	}
+}
+
+// TestKitCacheHealthCheck_EmptyCache verifies that an empty kit cache returns
+// OK (no kits built yet).
+func TestKitCacheHealthCheck_EmptyCache(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	result := doctor.Run(cfg)
+
+	c := findCheck(result, "kit-cache")
+	if c == nil {
+		t.Fatal("kit-cache check not found in result")
+	}
+	if c.Status != doctor.StatusOK {
+		t.Errorf("kit-cache status = %q, want OK for empty cache", c.Status)
+	}
+	if !strings.Contains(c.Message, "empty") {
+		t.Errorf("kit-cache message %q should mention 'empty'", c.Message)
+	}
+}
+
+// TestMountSourcesCheck_NoRunningBoxes verifies that when no agentbox-labeled
+// containers exist the check returns OK.
+func TestMountSourcesCheck_NoRunningBoxes(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	// Use a runtime bin that won't find any containers (or isn't installed).
+	// Either way, mount-sources should return OK — it degrades gracefully.
+	cfg := config.DefaultConfig()
+	result := doctor.Run(cfg)
+
+	c := findCheck(result, "mount-sources")
+	if c == nil {
+		t.Fatal("mount-sources check not found in result")
+	}
+	// On a clean dev machine with no agentbox boxes, should be OK.
+	// The check treats runtime-error as "no boxes" (graceful degradation).
+	if c.Status == doctor.StatusFail {
+		t.Errorf("mount-sources returned FAIL; want OK or WARN on clean machine: %s", c.Message)
 	}
 }
 

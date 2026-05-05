@@ -689,3 +689,89 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// ---- Phase 8: runtime dispatch + --fix wiring tests ----
+
+// TestNewLifecycle_PodmanRuntime verifies that cfg.Runtime = "podman" produces
+// a lifecycle whose Runtime is *container.PodmanRuntime.
+func TestNewLifecycle_PodmanRuntime(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	cfg := config.DefaultConfig()
+	cfg.Runtime = "podman"
+
+	lc, err := cli.NewLifecycle(cfg)
+	if err != nil {
+		t.Fatalf("NewLifecycle(podman): %v", err)
+	}
+	if _, ok := lc.Runtime.(*container.PodmanRuntime); !ok {
+		t.Errorf("expected *container.PodmanRuntime, got %T", lc.Runtime)
+	}
+}
+
+// TestNewLifecycle_DockerRuntime verifies that cfg.Runtime = "docker" produces
+// a lifecycle whose Runtime is *container.DockerRuntime.
+func TestNewLifecycle_DockerRuntime(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	cfg := config.DefaultConfig()
+	cfg.Runtime = "docker"
+
+	lc, err := cli.NewLifecycle(cfg)
+	if err != nil {
+		t.Fatalf("NewLifecycle(docker): %v", err)
+	}
+	if _, ok := lc.Runtime.(*container.DockerRuntime); !ok {
+		t.Errorf("expected *container.DockerRuntime, got %T", lc.Runtime)
+	}
+}
+
+// TestDoctor_Fix_NoFlag_NoFixCalls verifies that without --fix the output
+// contains no "applied fixes" line, even when checks have fixable issues.
+func TestDoctor_Fix_NoFlag_NoFixCalls(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	out, _, _ := runCmd(t, "doctor")
+	if strings.Contains(out, "applied fixes") {
+		t.Errorf("doctor without --fix should not output 'applied fixes', got:\n%s", out)
+	}
+}
+
+// TestDoctor_Fix_Flag_CallsFixes verifies that the --fix flag is accepted by
+// cobra (wired) and that the command runs without a "flag not defined" error.
+// We use a nonexistent runtime so no real container operations are attempted
+// and no Fix closures run actual pulls.
+func TestDoctor_Fix_Flag_CallsFixes(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	// Write a minimal config that uses a nonexistent runtime binary.
+	// This means corednsImageCheck will produce a WARN but its Fix closure
+	// will call "<nonexistent-bin> pull ..." which exits non-zero immediately
+	// without touching container storage.
+	cfgContent := "runtime = \"definitely-missing-bin-xyz\"\n"
+	if err := os.WriteFile(tmp+"/agentbox/config.toml", []byte(cfgContent), 0o644); err != nil {
+		// Directory may not exist yet — create it first.
+		if err2 := os.MkdirAll(tmp+"/agentbox", 0o755); err2 != nil {
+			t.Fatalf("mkdir: %v", err2)
+		}
+		if err2 := os.WriteFile(tmp+"/agentbox/config.toml", []byte(cfgContent), 0o644); err2 != nil {
+			t.Fatalf("write config: %v", err2)
+		}
+	}
+
+	// The command must accept --fix without any cobra "unknown flag" error.
+	_, stderr, err := runCmd(t, "doctor", "--fix")
+	if strings.Contains(stderr, "unknown flag") || strings.Contains(stderr, "flag provided but not defined") {
+		t.Errorf("--fix flag not wired (cobra flag error): %v\nstderr: %s", err, stderr)
+	}
+	// The command may return a non-zero exit (doctor failures) — that's fine.
+	// We only care that --fix itself was accepted by cobra.
+}

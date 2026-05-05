@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +23,18 @@ func newDoctorCmd() *cobra.Command {
 			}
 			result := doctor.Run(res.Config)
 
+			if fix && (result.AnyFail() || hasWarnWithFix(result)) {
+				attempted, fixErr := result.ApplyFixes()
+				if !global.JSON && len(attempted) > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "applied fixes: %s\n", strings.Join(attempted, ", "))
+				}
+				if fixErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "fix error: %v\n", fixErr)
+				}
+				// Re-run checks so output reflects the new state.
+				result = doctor.Run(res.Config)
+			}
+
 			if global.JSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
@@ -36,10 +49,19 @@ func newDoctorCmd() *cobra.Command {
 			if result.AnyFail() {
 				return exitcode.New(exitcode.Generic, "doctor reported failures")
 			}
-			_ = fix
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&fix, "fix", false, "attempt safe auto-remediation")
 	return cmd
+}
+
+// hasWarnWithFix reports whether any check is WARN with a non-nil Fix.
+func hasWarnWithFix(r doctor.Result) bool {
+	for _, c := range r.Checks {
+		if c.Status == doctor.StatusWarn && c.Fix != nil {
+			return true
+		}
+	}
+	return false
 }
