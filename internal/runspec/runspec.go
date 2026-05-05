@@ -1,0 +1,246 @@
+package runspec
+
+import (
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/nklisch/agentbox/internal/config"
+	"github.com/nklisch/agentbox/internal/project"
+)
+
+// Mount is a single bind mount.
+type Mount struct {
+	Source string
+	Target string
+	Mode   string // "rw" or "ro"
+}
+
+// PodmanCreateArgs is the structured form of a `podman create` invocation.
+// Phase 3 will use this to actually call podman; Phase 1 only renders it
+// for --dry-run.
+type PodmanCreateArgs struct {
+	Name     string
+	Labels   []KV
+	Mounts   []Mount
+	Workdir  string
+	EnvNames []string // -e NAME (no value, by name only — secrets policy)
+	CPUs     int
+	Memory   string
+	PIDs     int
+	CapDrop  []string
+	SecOpt   []string
+	Network  string
+	Image    string
+	Argv     []string // typically [sleep, infinity]
+}
+
+// KV is a stable-ordered key/value pair (labels are an ordered list, not a
+// map, so output is deterministic).
+type KV struct {
+	Key   string
+	Value string
+}
+
+// BuildInput is everything BuildPodmanCreateArgs needs that isn't in Config.
+type BuildInput struct {
+	ProjectID   string
+	ProjectAbs  string
+	ProjectName string
+	Agent       string
+	Kits        []string
+	HomeDir     string
+	StateDir    string
+	Created     time.Time
+}
+
+// KitImageTag returns the canonical image tag for a kit list.
+//
+//	tag = "agentbox/" + sha1(joined_resolved_list)[:12]
+//
+// Phase 1 uses this for the dry-run output even though the image won't
+// be built until Phase 2.
+func KitImageTag(kits []string) string {
+	resolved := make([]string, len(kits))
+	copy(resolved, kits)
+	sort.Strings(resolved)
+	h := sha1.Sum([]byte(strings.Join(resolved, "+")))
+	return "agentbox/" + hex.EncodeToString(h[:])[:12]
+}
+
+// NetworkArg returns the value for `--network` per network.mode. Phase 1
+// returns the placeholder name; Phase 6 will create the network.
+func NetworkArg(cfg config.Config, projectID string) string {
+	switch cfg.Network.Mode {
+	case "off":
+		return "none"
+	case "open":
+		return "bridge"
+	default: // safe, allowlist
+		return project.NetworkName(projectID)
+	}
+}
+
+// BuildPodmanCreateArgs assembles the full args from config + input.
+func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, error) {
+	args := PodmanCreateArgs{
+		Name:    project.ContainerName(in.ProjectID),
+		Workdir: in.ProjectAbs,
+		CPUs:    cfg.Resources.CPUs,
+		Memory:  cfg.Resources.Memory,
+		PIDs:    cfg.Resources.PIDs,
+		CapDrop: []string{"ALL"},
+		SecOpt:  []string{"no-new-privileges"},
+		Network: NetworkArg(cfg, in.ProjectID),
+		Image:   KitImageTag(in.Kits),
+		Argv:    []string{"sleep", "infinity"},
+	}
+
+	args.Labels = []KV{
+		{"agentbox", "1"},
+		{"agentbox.project", in.ProjectName},
+		{"agentbox.project_id", in.ProjectID},
+		{"agentbox.cwd", in.ProjectAbs},
+		{"agentbox.agent", in.Agent},
+		{"agentbox.kits", strings.Join(in.Kits, ",")},
+		{"agentbox.kit_image", args.Image},
+		{"agentbox.created", in.Created.UTC().Format(time.RFC3339)},
+	}
+
+	// Same-path project mount (non-negotiable per CLAUDE.md).
+	args.Mounts = []Mount{
+		{Source: in.ProjectAbs, Target: in.ProjectAbs, Mode: "rw"},
+	}
+	if cfg.Mounts.Gitconfig && in.HomeDir != "" {
+		args.Mounts = append(args.Mounts, Mount{
+			Source: in.HomeDir + "/.gitconfig",
+			Target: "/root/.gitconfig",
+			Mode:   "rw",
+		})
+	}
+	if cfg.Mounts.SSHReadonly && in.HomeDir != "" {
+		args.Mounts = append(args.Mounts, Mount{
+			Source: in.HomeDir + "/.ssh",
+			Target: "/root/.ssh",
+			Mode:   "ro",
+		})
+	}
+	// Agent config dir for the resolved agent only.
+	if src, ok := cfg.Mounts.AgentConfigs[in.Agent]; ok && src != "" {
+		expanded := expandHome(src, in.HomeDir)
+		args.Mounts = append(args.Mounts, Mount{
+			Source: expanded,
+			Target: "/root/." + in.Agent,
+			Mode:   "rw",
+		})
+	}
+	// Session state dir mounts (shell history, layout, effective config).
+	if in.StateDir != "" {
+		args.Mounts = append(args.Mounts,
+			Mount{Source: in.StateDir + "/history", Target: "/root/.local/share/agentbox-history", Mode: "rw"},
+			Mount{Source: in.StateDir + "/layout.kdl", Target: "/etc/agentbox/layout.kdl", Mode: "ro"},
+			Mount{Source: in.StateDir + "/effective-config.toml", Target: "/etc/agentbox/config.toml", Mode: "ro"},
+		)
+	}
+	// Extra mounts ("<src>:<dst>:<mode>"). Validation deferred to a later phase.
+	for _, e := range cfg.Mounts.Extra {
+		m, err := parseExtraMount(e, in.HomeDir)
+		if err != nil {
+			return args, fmt.Errorf("mounts.extra: %w", err)
+		}
+		args.Mounts = append(args.Mounts, m)
+	}
+
+	args.EnvNames = append(args.EnvNames, cfg.Secrets.Passthrough...)
+
+	if cfg.Containers.Enable {
+		// SPEC.md "Conditional flags (nested containers)".
+		// Devices added at the runtime layer (not here in P1; Phase 7 wires this).
+		// We emit the security-opt entries so the dry-run is honest.
+		args.SecOpt = append(args.SecOpt,
+			"seccomp=/etc/agentbox/seccomp/containers.json",
+			"unmask=/proc/sys/net/ipv4",
+		)
+		// CapDrop ALL stays; Phase 7's containers kit re-grants SETUID/SETGID
+		// via --cap-add at the runtime layer. P1 emits the dropped state and
+		// leaves Phase 7 to add the cap-add lines.
+	}
+
+	return args, nil
+}
+
+// ToShell renders the args as a multi-line shell invocation suitable for
+// `agentbox run --dry-run` output. The first line is the runtime + create
+// verb; each flag is on its own indented line ending with ` \`.
+func (p PodmanCreateArgs) ToShell(runtime string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s create \\\n", runtime)
+	fmt.Fprintf(&b, "  --name %q \\\n", p.Name)
+	for _, kv := range p.Labels {
+		fmt.Fprintf(&b, "  --label %q \\\n", kv.Key+"="+kv.Value)
+	}
+	for _, m := range p.Mounts {
+		fmt.Fprintf(&b, "  -v %q \\\n", m.Source+":"+m.Target+":"+m.Mode)
+	}
+	if p.Workdir != "" {
+		fmt.Fprintf(&b, "  -w %q \\\n", p.Workdir)
+	}
+	if p.CPUs > 0 {
+		fmt.Fprintf(&b, "  --cpus %d \\\n", p.CPUs)
+	}
+	if p.Memory != "" {
+		fmt.Fprintf(&b, "  --memory %q \\\n", p.Memory)
+	}
+	if p.PIDs > 0 {
+		fmt.Fprintf(&b, "  --pids-limit %d \\\n", p.PIDs)
+	}
+	for _, c := range p.CapDrop {
+		fmt.Fprintf(&b, "  --cap-drop %s \\\n", c)
+	}
+	for _, s := range p.SecOpt {
+		fmt.Fprintf(&b, "  --security-opt %s \\\n", s)
+	}
+	if p.Network != "" {
+		fmt.Fprintf(&b, "  --network %q \\\n", p.Network)
+	}
+	for _, e := range p.EnvNames {
+		fmt.Fprintf(&b, "  -e %s \\\n", e)
+	}
+	fmt.Fprintf(&b, "  %q", p.Image)
+	for _, a := range p.Argv {
+		fmt.Fprintf(&b, " %q", a)
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
+// expandHome replaces a leading "~" with homeDir.
+func expandHome(s, homeDir string) string {
+	if strings.HasPrefix(s, "~/") && homeDir != "" {
+		return homeDir + s[1:]
+	}
+	if s == "~" && homeDir != "" {
+		return homeDir
+	}
+	return s
+}
+
+// parseExtraMount parses "<src>:<dst>:<mode>" with ~ expansion on src.
+func parseExtraMount(spec, homeDir string) (Mount, error) {
+	parts := strings.Split(spec, ":")
+	if len(parts) != 3 {
+		return Mount{}, fmt.Errorf("expected <src>:<dst>:<mode>, got %q", spec)
+	}
+	mode := parts[2]
+	if mode != "rw" && mode != "ro" {
+		return Mount{}, fmt.Errorf("mode must be rw or ro, got %q", mode)
+	}
+	return Mount{
+		Source: expandHome(parts[0], homeDir),
+		Target: parts[1],
+		Mode:   mode,
+	}, nil
+}
