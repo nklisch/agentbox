@@ -1064,6 +1064,140 @@ func TestLs_UnlabeledBoxIncluded(t *testing.T) {
 	}
 }
 
+// ---- Group B: trail wiring gate tests ----
+
+// captureCreateArgs is a fakeRuntime that captures the PodmanCreateArgs passed
+// to Create so tests can inspect mounts and env vars.
+type captureRuntime struct {
+	*fakeRuntime
+	lastCreate runspec.PodmanCreateArgs
+}
+
+func newCaptureRuntime() *captureRuntime {
+	return &captureRuntime{fakeRuntime: newFakeRuntime()}
+}
+
+func (r *captureRuntime) Create(args runspec.PodmanCreateArgs) error {
+	r.lastCreate = args
+	return r.fakeRuntime.Create(args)
+}
+
+// newCaptureLifecycle builds a Lifecycle with a captureRuntime so tests can
+// inspect the PodmanCreateArgs. It also pre-creates the ~/.claude dir so the
+// WriteShadowSettings path exists when auditor+claude fires.
+func newCaptureLifecycle(t *testing.T, cr *captureRuntime, cfg config.Config) *lifecycle.Lifecycle {
+	t.Helper()
+	isolateState(t)
+	homeDir := t.TempDir()
+	// Create ~/.claude dir so WriteShadowSettings can find it (it reads
+	// ~/.claude/settings.json which may not exist — that's fine, MergeTrailHooks
+	// handles a missing file). The dir itself must exist for path join to work
+	// cleanly in WriteShadowSettings.
+	os.MkdirAll(filepath.Join(homeDir, ".claude"), 0o700)
+	netMgr := newFakeNetworkManager()
+	return &lifecycle.Lifecycle{
+		Cfg:     cfg,
+		Runtime: cr,
+		Builder: newTestBuilder(t, nil),
+		Network: netMgr,
+		Home:    homeDir,
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+	}
+}
+
+func hasMount(mounts []runspec.Mount, target, mode string) bool {
+	for _, m := range mounts {
+		if m.Target == target && m.Mode == mode {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnvVar(envVars []runspec.KV, key string) bool {
+	for _, kv := range envVars {
+		if kv.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRun_AuditorClaude_WiresTrailMount(t *testing.T) {
+	cr := newCaptureRuntime()
+	cfg := defaultTestCfg()
+	setupProject(t)
+
+	l := newCaptureLifecycle(t, cr, cfg)
+	err := l.Run(lifecycle.RunOpts{
+		Attach: false,
+		Layout: "auditor",
+		Agent:  "claude",
+	})
+	if err != nil {
+		t.Fatalf("Run(auditor, claude): %v", err)
+	}
+	mounts := cr.lastCreate.Mounts
+	if !hasMount(mounts, "/etc/agentbox/trail.jsonl", "rw") {
+		t.Errorf("expected trail.jsonl rw mount for auditor+claude, mounts: %+v", mounts)
+	}
+	if !hasMount(mounts, "/root/.claude/settings.json", "ro") {
+		t.Errorf("expected shadow settings ro mount for auditor+claude, mounts: %+v", mounts)
+	}
+	if !hasEnvVar(cr.lastCreate.EnvVars, "BOX_TRAIL_FILE") {
+		t.Errorf("expected BOX_TRAIL_FILE env var for auditor+claude, envvars: %+v", cr.lastCreate.EnvVars)
+	}
+}
+
+func TestRun_FocusClaude_NoTrailMount(t *testing.T) {
+	cr := newCaptureRuntime()
+	cfg := defaultTestCfg()
+	setupProject(t)
+
+	l := newCaptureLifecycle(t, cr, cfg)
+	err := l.Run(lifecycle.RunOpts{
+		Attach: false,
+		Layout: "focus",
+		Agent:  "claude",
+	})
+	if err != nil {
+		t.Fatalf("Run(focus, claude): %v", err)
+	}
+	mounts := cr.lastCreate.Mounts
+	if hasMount(mounts, "/etc/agentbox/trail.jsonl", "rw") {
+		t.Errorf("trail mount should be absent for focus+claude, mounts: %+v", mounts)
+	}
+	if hasEnvVar(cr.lastCreate.EnvVars, "BOX_TRAIL_FILE") {
+		t.Errorf("BOX_TRAIL_FILE should be absent for focus+claude, envvars: %+v", cr.lastCreate.EnvVars)
+	}
+}
+
+func TestRun_AuditorNonClaude_NoTrailMount(t *testing.T) {
+	cr := newCaptureRuntime()
+	cfg := defaultTestCfg()
+	// Add a non-claude agent to the config.
+	cfg.Agents["codex"] = config.Agent{Kits: []string{"base"}}
+	setupProject(t)
+
+	l := newCaptureLifecycle(t, cr, cfg)
+	err := l.Run(lifecycle.RunOpts{
+		Attach: false,
+		Layout: "auditor",
+		Agent:  "codex",
+	})
+	if err != nil {
+		t.Fatalf("Run(auditor, codex): %v", err)
+	}
+	mounts := cr.lastCreate.Mounts
+	if hasMount(mounts, "/etc/agentbox/trail.jsonl", "rw") {
+		t.Errorf("trail mount should be absent for auditor+codex, mounts: %+v", mounts)
+	}
+	if hasEnvVar(cr.lastCreate.EnvVars, "BOX_TRAIL_FILE") {
+		t.Errorf("BOX_TRAIL_FILE should be absent for auditor+codex, envvars: %+v", cr.lastCreate.EnvVars)
+	}
+}
+
 // ---- Phase 7: containers seccomp wiring tests ----
 
 func TestEnsureBox_ContainersEnable_WritesSeccompProfile(t *testing.T) {

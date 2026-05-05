@@ -44,6 +44,11 @@ type Lifecycle struct {
 	Home    string
 	Stdout  io.Writer
 	Stderr  io.Writer
+
+	// pendingLayoutName is set by Run before EnsureBox so createBox can consult
+	// the resolved layout name when deciding whether to wire trail mounts.
+	// It is ephemeral (per-Run call) and not safe to read outside of a Run call.
+	pendingLayoutName string
 }
 
 // EnsureOpts controls box creation.
@@ -164,6 +169,21 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 		Created:     time.Now(),
 		SidecarDNS:  netInfo.SidecarDNS, // CoreDNS sidecar IP for --dns (safe/allowlist)
 		SeccompPath: seccompPath,
+	}
+	// Trail wiring: only active when auditor layout + claude agent.
+	// The layout name is stored in l.pendingLayoutName (set by Run before calling
+	// EnsureBox) so createBox can consult it here.
+	if trailEnabled(l.pendingLayoutName, agent) {
+		trailPath, err := EnsureTrailFile(stateDir)
+		if err != nil {
+			return container.Box{}, exitcode.Wrap(exitcode.Generic, err)
+		}
+		settingsPath, err := WriteShadowSettings(stateDir, l.Home)
+		if err != nil {
+			return container.Box{}, exitcode.Wrap(exitcode.Generic, err)
+		}
+		in.TrailHostPath = trailPath
+		in.ClaudeSettingsHostPath = settingsPath
 	}
 	args, err := runspec.BuildPodmanCreateArgs(l.Cfg, in)
 	if err != nil {
@@ -304,9 +324,27 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 	if opts.Network != "" {
 		l.Cfg.Network.Mode = opts.Network
 	}
+
+	// Resolve the layout name before EnsureBox so createBox can consult it
+	// when deciding whether to wire trail mounts (auditor + claude gate).
+	// --layout flag wins; then config; then "focus".
+	home, _ := os.UserHomeDir()
+	layoutName := opts.Layout
+	if layoutName == "" {
+		layoutName = l.Cfg.Zellij.Layout
+	}
+	spec, err := zellij.Resolve(layoutName, home)
+	if err != nil {
+		return exitcode.Wrap(exitcode.InvalidArgs, err)
+	}
+
+	// Stash the resolved name so createBox (called from EnsureBox) can use it
+	// for the trail-wiring gate. Cleared after EnsureBox returns.
+	l.pendingLayoutName = spec.Name
 	box, err := l.EnsureBox(EnsureOpts{
 		Agent: opts.Agent, Kits: opts.Kits, Fresh: opts.Fresh,
 	})
+	l.pendingLayoutName = "" // clear; ephemeral per-Run only
 	if err != nil {
 		return err
 	}
@@ -321,25 +359,9 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 		return exitcode.New(exitcode.InvalidArgs, "agent %q not defined", agent)
 	}
 
-	// Resolve the layout name: --layout flag wins, then config, then "focus".
-	home, _ := os.UserHomeDir()
-	layoutName := opts.Layout
-	if layoutName == "" {
-		layoutName = l.Cfg.Zellij.Layout
-	}
-	spec, err := zellij.Resolve(layoutName, home)
-	if err != nil {
-		return exitcode.Wrap(exitcode.InvalidArgs, err)
-	}
-
-	// Group B: trail wiring decision. For Group A, trailFile is always empty.
-	// The Group B agent will wire the trail mount and BOX_TRAIL_FILE env var
-	// when spec.Name == "auditor" && agent == "claude".
-	var trailFile string
-
 	// Write the layout unconditionally so `agentbox attach .` can reconnect
 	// even when --no-attach was used to start the box.
-	if err := writeLayoutFor(box.ProjectID, box.CWD, spec, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell, trailFile); err != nil {
+	if err := writeLayoutFor(box.ProjectID, box.CWD, spec, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell, ""); err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
 

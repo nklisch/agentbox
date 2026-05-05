@@ -219,6 +219,92 @@ func TestGenerateKDL_Reviewer_Cwd(t *testing.T) {
 	}
 }
 
+// ---- auditor layout ----
+
+func TestGenerateKDL_Auditor_HasAllPanes(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "auditor",
+		AgentCmd:   []string{"claude"},
+		ProjectAbs: "/p",
+		Shell:      "zsh",
+	})
+	for _, frag := range []string{
+		`tab name="auditor" focus=true`,
+		`pane size="60%" name="agent"`,
+		`pane size="40%" name="trail"`,
+		`command "box-agent"`,
+		`args "claude"`,
+		`command "box-trail"`,
+		`tab name="shell"`,
+		`default_tab_template`,
+		`plugin location="tab-bar"`,
+		`plugin location="status-bar"`,
+	} {
+		if !strings.Contains(out, frag) {
+			t.Errorf("auditor layout missing fragment %q in:\n%s", frag, out)
+		}
+	}
+}
+
+func TestGenerateKDL_Auditor_TwoTabs(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "auditor",
+		AgentCmd:   []string{"claude"},
+		ProjectAbs: "/p",
+		Shell:      "zsh",
+	})
+	if got := strings.Count(out, "tab name="); got != 2 {
+		t.Errorf("auditor layout: want 2 tabs, got %d:\n%s", got, out)
+	}
+}
+
+func TestGenerateKDL_Auditor_EmptyAgentCmd_NotWrapped(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "auditor",
+		AgentCmd:   nil,
+		ProjectAbs: "/p",
+		Shell:      "zsh",
+	})
+	if strings.Contains(out, "box-agent") {
+		t.Errorf("empty AgentCmd should not be wrapped in box-agent in auditor layout:\n%s", out)
+	}
+}
+
+func TestGenerateKDL_Auditor_NoArgsForTrail(t *testing.T) {
+	// box-trail reads $BOX_TRAIL_FILE from env — no args in the KDL.
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "auditor",
+		AgentCmd:   []string{"claude"},
+		ProjectAbs: "/p",
+		Shell:      "zsh",
+	})
+	// The trail pane should have command "box-trail" but no args line.
+	if !strings.Contains(out, `command "box-trail"`) {
+		t.Errorf("auditor layout missing box-trail command:\n%s", out)
+	}
+	// Verify no args after box-trail (trail reads from env only).
+	if strings.Contains(out, `args "box-trail"`) {
+		t.Errorf("box-trail should not have args in the KDL:\n%s", out)
+	}
+}
+
+func TestGenerateKDL_Auditor_Cwd(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "auditor",
+		AgentCmd:   []string{"claude"},
+		ProjectAbs: "/home/u/my project",
+		Shell:      "zsh",
+	})
+	if !strings.Contains(out, `cwd "/home/u/my project"`) {
+		t.Errorf("auditor layout missing quoted cwd:\n%s", out)
+	}
+}
+
 // ---- v0.2.3: tab-bar + status-bar via default_tab_template ----
 
 func TestGenerateKDL_Run_HasTabAndStatusBars(t *testing.T) {

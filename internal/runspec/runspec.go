@@ -62,6 +62,12 @@ type BuildInput struct {
 	Created     time.Time
 	SidecarDNS  []string // IPs to pass as --dns; set by lifecycle from network.Info.SidecarDNS
 	SeccompPath string   // host path to bundled containers.json; populated by lifecycle when Containers.Enable
+
+	// Trail wiring (auditor layout + claude agent only). Both are set together
+	// by lifecycle when trailEnabled(layoutName, agent) is true; both are empty
+	// otherwise. Lifecycle is responsible for the gate decision.
+	TrailHostPath          string // <state>/trail.jsonl; bound rw to /etc/agentbox/trail.jsonl
+	ClaudeSettingsHostPath string // <state>/claude-settings.json; shadow-mounted ro over /root/.claude/settings.json
 }
 
 // KitImageTag returns the canonical image tag for a kit list.
@@ -181,6 +187,37 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 			Mode:   "rw",
 		})
 	}
+	// Trail mount (auditor + claude only). Lifecycle sets in.TrailHostPath to
+	// the host JSONL path when trail is wired; we bind-mount it rw to the
+	// in-container path and set BOX_TRAIL_FILE so box-trail can find it.
+	if in.TrailHostPath != "" {
+		args.Mounts = append(args.Mounts, Mount{
+			Source: in.TrailHostPath,
+			Target: "/etc/agentbox/trail.jsonl",
+			Mode:   "rw",
+		})
+		args.EnvVars = append(args.EnvVars, KV{
+			Key:   "BOX_TRAIL_FILE",
+			Value: "/etc/agentbox/trail.jsonl",
+		})
+	}
+
+	// Settings shadow mount (auditor + claude only). Lifecycle has merged
+	// agentbox's trail hooks into the user's settings.json and written the
+	// result to in.ClaudeSettingsHostPath. We bind-mount it read-only on top
+	// of the existing ~/.claude directory mount so /root/.claude/settings.json
+	// inside the box is the agentbox-managed copy. Mount ORDER matters: this
+	// MUST come after the ~/.claude:/root/.claude directory mount above so
+	// podman layers the file on top of the directory mount correctly.
+	// The host's actual ~/.claude/settings.json is never touched by agentbox.
+	if in.ClaudeSettingsHostPath != "" {
+		args.Mounts = append(args.Mounts, Mount{
+			Source: in.ClaudeSettingsHostPath,
+			Target: "/root/.claude/settings.json",
+			Mode:   "ro",
+		})
+	}
+
 	// Session state dir mounts (shell history, layout, effective config, saved/).
 	if in.StateDir != "" {
 		args.Mounts = append(args.Mounts,

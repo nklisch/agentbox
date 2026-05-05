@@ -633,6 +633,159 @@ func TestBuildPodmanCreateArgs_NonClaudeNoJSONMount(t *testing.T) {
 	}
 }
 
+// ---- Group B: trail mount + BOX_TRAIL_FILE env var tests ----
+
+func TestBuildPodmanCreateArgs_TrailMount_WhenPathSet(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.TrailHostPath = "/home/user/.local/share/agentbox/sessions/abc123456789/trail.jsonl"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	found := false
+	for _, m := range args.Mounts {
+		if m.Source == in.TrailHostPath &&
+			m.Target == "/etc/agentbox/trail.jsonl" &&
+			m.Mode == "rw" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected trail mount {%s:/etc/agentbox/trail.jsonl:rw}, not found in %+v",
+			in.TrailHostPath, args.Mounts)
+	}
+}
+
+func TestBuildPodmanCreateArgs_TrailMount_AbsentWhenNoPath(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	// TrailHostPath is empty (trail not wired).
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	for _, m := range args.Mounts {
+		if m.Target == "/etc/agentbox/trail.jsonl" {
+			t.Errorf("trail mount should be absent when TrailHostPath is empty, got: %+v", m)
+		}
+	}
+}
+
+func TestBuildPodmanCreateArgs_BOXTrailFileEnv_WhenTrailPathSet(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.TrailHostPath = "/host/state/trail.jsonl"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	found := false
+	for _, kv := range args.EnvVars {
+		if kv.Key == "BOX_TRAIL_FILE" && kv.Value == "/etc/agentbox/trail.jsonl" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected BOX_TRAIL_FILE=/etc/agentbox/trail.jsonl in EnvVars, got %+v", args.EnvVars)
+	}
+}
+
+func TestBuildPodmanCreateArgs_BOXTrailFileEnv_AbsentWhenNoPath(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	// TrailHostPath empty.
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	for _, kv := range args.EnvVars {
+		if kv.Key == "BOX_TRAIL_FILE" {
+			t.Errorf("BOX_TRAIL_FILE should be absent when TrailHostPath is empty, got %q", kv.Value)
+		}
+	}
+}
+
+func TestBuildPodmanCreateArgs_ClaudeSettingsMount_WhenPathSet(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.ClaudeSettingsHostPath = "/home/user/.local/share/agentbox/sessions/abc123456789/claude-settings.json"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	found := false
+	for _, m := range args.Mounts {
+		if m.Source == in.ClaudeSettingsHostPath &&
+			m.Target == "/root/.claude/settings.json" &&
+			m.Mode == "ro" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected shadow settings mount {%s:/root/.claude/settings.json:ro}, not found in %+v",
+			in.ClaudeSettingsHostPath, args.Mounts)
+	}
+}
+
+func TestBuildPodmanCreateArgs_ClaudeSettingsMount_AbsentWhenNoPath(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	// ClaudeSettingsHostPath empty.
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	for _, m := range args.Mounts {
+		if m.Target == "/root/.claude/settings.json" {
+			t.Errorf("shadow settings mount should be absent when ClaudeSettingsHostPath is empty, got: %+v", m)
+		}
+	}
+}
+
+func TestBuildPodmanCreateArgs_SettingsShadow_AfterClaudeDir(t *testing.T) {
+	// Mount order: the shadow settings file MUST come after the ~/.claude directory
+	// mount so podman layers the file on top of the directory bind correctly.
+	cfg := config.DefaultConfig()
+	// Enable the ~/.claude directory mount by providing an AgentConfigs entry.
+	cfg.Mounts.AgentConfigs = map[string]string{"claude": "~/.claude"}
+	in := defaultInput()
+	in.ClaudeSettingsHostPath = "/host/state/claude-settings.json"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	claudeDirIdx, settingsShadowIdx := -1, -1
+	for i, m := range args.Mounts {
+		if m.Target == "/root/.claude" {
+			claudeDirIdx = i
+		}
+		if m.Target == "/root/.claude/settings.json" {
+			settingsShadowIdx = i
+		}
+	}
+	if claudeDirIdx < 0 {
+		t.Fatal("~/.claude directory mount not found")
+	}
+	if settingsShadowIdx < 0 {
+		t.Fatal("shadow settings mount not found")
+	}
+	if claudeDirIdx >= settingsShadowIdx {
+		t.Errorf("shadow settings (idx %d) must come AFTER claude dir mount (idx %d)",
+			settingsShadowIdx, claudeDirIdx)
+	}
+}
+
 // ---- Phase 7: CapAdd + Devices + seccomp mount tests ----
 
 func TestBuildPodmanCreateArgs_ContainersEnable_AddsCapAndDevices(t *testing.T) {

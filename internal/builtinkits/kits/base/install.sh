@@ -199,8 +199,10 @@ install -m 0755 "${KIT_DIR}/box-save"       /usr/local/bin/box-save
 install -m 0755 "${KIT_DIR}/box-help"       /usr/local/bin/box-help
 install -m 0755 "${KIT_DIR}/box-agent"       /usr/local/bin/box-agent
 install -m 0755 "${KIT_DIR}/box-git-watch"   /usr/local/bin/box-git-watch
-install -m 0755 "${KIT_DIR}/box-diff-watch"  /usr/local/bin/box-diff-watch
-install -m 0755 "${KIT_DIR}/box-tests-watch" /usr/local/bin/box-tests-watch
+install -m 0755 "${KIT_DIR}/box-diff-watch"         /usr/local/bin/box-diff-watch
+install -m 0755 "${KIT_DIR}/box-tests-watch"        /usr/local/bin/box-tests-watch
+install -m 0755 "${KIT_DIR}/box-trail"              /usr/local/bin/box-trail
+install -m 0755 "${KIT_DIR}/agentbox-hook-record"   /usr/local/bin/agentbox-hook-record
 
 # --- jgrep (gron-grep round-trip wrapper) ---
 # Lets agents grep into JSON without composing the gron pipeline by hand.

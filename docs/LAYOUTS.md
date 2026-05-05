@@ -82,11 +82,45 @@ Pre-commit posture: split pane for code review + live diff + test runner.
 
 ### `auditor`
 
-Agent observability: agent + live trail of Claude Code tool calls.
+Agent observability: agent pane (60% rows) + live tool-call trail pane (40% rows).
 
-> **Note:** Group B (trail wiring) is not yet shipped. In the current release,
-> `--layout auditor` renders the layout with the panes, but the trail pane shows the
-> focus layout (no live trail). The Group B agent will wire the real `box-trail` renderer.
+```
+┌──────────────────────────────────────────────────┐
+│  tab: auditor (focused)          tab: shell       │  ← tab bar
+├──────────────────────────────────────────────────┤
+│                                                  │
+│          agent pane (60%)                        │
+│      claude --dangerously-skip-permissions       │
+│                                                  │
+├──────────────────────────────────────────────────┤
+│          trail pane (40%)                        │
+│  box-trail tails trail.jsonl, renders events     │
+│  14:22:01  PostToolUse   Bash   git status  294ms │
+│  14:22:08  PostToolUse   Edit   runspec.go        │
+├──────────────────────────────────────────────────┤
+│  status bar                                      │
+└──────────────────────────────────────────────────┘
+```
+
+- **agent pane** (full width, 60% rows) — same `box-agent` wrapping as `focus`.
+- **trail pane** (full width, 40% rows) — `box-trail` tails the JSONL trail file and
+  renders one color-coded line per Claude Code hook event.
+- **shell tab** — same bare `zsh` as other built-in layouts.
+
+**Trail wiring** is automatic when `agent = "claude"` (the only supported agent in v1).
+agentbox writes a merged `claude-settings.json` (user settings + agentbox trail hooks) and
+shadow-mounts it read-only on top of `/root/.claude/settings.json` inside the box. The host's
+`~/.claude/settings.json` is never modified.
+
+For non-claude agents, the trail pane shows a placeholder message and stays alive.
+
+**Env var set by agentbox for trail-wired sessions:**
+
+| Variable | Value |
+| -------- | ----- |
+| `BOX_TRAIL_FILE` | `/etc/agentbox/trail.jsonl` (in-container path) |
+
+See [docs/TRAIL.md](TRAIL.md) for the full JSONL event schema and extension guide.
 
 ---
 
@@ -145,9 +179,18 @@ kills the previous run if a change fires before it finishes.
 Tails `$BOX_TRAIL_FILE` (the agent-activity JSONL trail) and renders one color-coded line
 per Claude Code hook event. Used in the `auditor` layout's trail pane.
 
-> Ships in Group A but is only fully functional once Group B (trail wiring) lands. When
-> `BOX_TRAIL_FILE` is unset (no trail wiring), `box-trail` prints a placeholder message and
-> sleeps so the pane stays visible.
+When `BOX_TRAIL_FILE` is unset (non-claude agent or non-auditor layout), `box-trail` prints
+a placeholder message and sleeps so the pane stays visible.
+
+**Color scheme:**
+
+| Event | Color |
+| ----- | ----- |
+| `PreToolUse` | dim (high volume; quieted) |
+| `PostToolUse` | cyan |
+| `PostToolUseFailure` | red |
+| `Stop` | magenta |
+| `StopFailure` | bold red |
 
 **Env var:**
 

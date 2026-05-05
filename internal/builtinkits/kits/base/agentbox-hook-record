@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# agentbox-hook-record — invoked by Claude Code hooks. Reads JSON from stdin,
+# adds a UTC ISO-8601 timestamp as `trail_ts`, and appends one line to
+# $BOX_TRAIL_FILE.
+#
+# Configured by agentbox in the session-merged claude settings.json:
+#   "hooks": {
+#     "PostToolUse": [{
+#       "matcher": "*",
+#       "hooks": [{"type": "command", "command": "/usr/local/bin/agentbox-hook-record"}]
+#     }],
+#     ...
+#   }
+#
+# Exits 0 always — even on malformed stdin. Claude Code treats exit 2 as a
+# blocking hook error; we never want trail recording to block the agent.
+
+set -u
+
+trail="${BOX_TRAIL_FILE:-/etc/agentbox/trail.jsonl}"
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Read stdin once so we can inspect and write it atomically.
+input=$(cat)
+
+# Append the timestamped record. jq -c renders compact JSON (single line),
+# which is required for valid JSONL. O_APPEND writes are atomic for lines
+# shorter than PIPE_BUF (4KB on Linux); larger payloads may interleave in
+# theory but are rare in practice for typical tool-call events.
+#
+# On malformed input, emit a stub record so the trail captures the failure
+# visibly rather than silently dropping it.
+if printf '%s' "$input" | jq -e . >/dev/null 2>&1; then
+    printf '%s' "$input" | jq -c --arg ts "$ts" '. + {trail_ts: $ts}' >> "$trail"
+else
+    jq -nc --arg ts "$ts" --arg raw "$input" \
+        '{trail_ts: $ts, hook_event_name: "?", error: "malformed_input", raw: $raw}' >> "$trail"
+fi
+
+exit 0

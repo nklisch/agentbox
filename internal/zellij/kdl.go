@@ -25,7 +25,7 @@ import (
 // For ModeRun, dispatches by LayoutName:
 //   - "" or "focus": focusLayout (current default behavior)
 //   - "reviewer":    reviewerLayout (Unit 5)
-//   - "auditor":     auditorLayout (Unit 6, Group B — placeholder until then)
+//   - "auditor":     auditorLayout (Unit 6, Group B)
 //   - anything else with l.CustomKDL non-empty: write CustomKDL verbatim
 //   - anything else with empty CustomKDL: caller bug — fall back to focus
 func GenerateKDL(l Layout) string {

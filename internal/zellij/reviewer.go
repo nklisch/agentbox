@@ -60,11 +60,3 @@ func reviewerLayout(l Layout) string {
 	return b.String()
 }
 
-// auditorLayout is the Group B placeholder. The full implementation ships in
-// the follow-up agent. Until then, it falls back to focusLayout so that
-// `--layout auditor` doesn't crash — it just silently uses the focus shape.
-// The Group B agent will replace this with the real two-pane auditor layout
-// (agent 60% + trail 40%).
-func auditorLayout(l Layout) string {
-	return focusLayout(l)
-}
