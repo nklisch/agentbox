@@ -35,6 +35,8 @@ type PodmanCreateArgs struct {
 	CapDrop  []string
 	SecOpt   []string
 	Network  string
+	IP       string   // --ip <addr>; used by the CoreDNS sidecar for stable addressing
+	DNS      []string // --dns <ip> entries; Phase 6 sets to [coredns-sidecar-ip] for safe/allowlist
 	Image    string
 	Argv     []string // typically [sleep, infinity]
 }
@@ -56,6 +58,7 @@ type BuildInput struct {
 	HomeDir     string
 	StateDir    string
 	Created     time.Time
+	SidecarDNS  []string // IPs to pass as --dns; set by lifecycle from network.Info.SidecarDNS
 }
 
 // KitImageTag returns the canonical image tag for a kit list.
@@ -96,12 +99,14 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		CapDrop: []string{"ALL"},
 		SecOpt:  []string{"no-new-privileges"},
 		Network: NetworkArg(cfg, in.ProjectID),
+		DNS:     in.SidecarDNS,
 		Image:   KitImageTag(in.Kits),
 		Argv:    []string{"sleep", "infinity"},
 	}
 
 	args.Labels = []KV{
 		{"agentbox", "1"},
+		{"agentbox.role", "box"}, // identifies this as a user-facing box (not sidecar)
 		{"agentbox.project", in.ProjectName},
 		{"agentbox.project_id", in.ProjectID},
 		{"agentbox.cwd", in.ProjectAbs},
@@ -220,6 +225,12 @@ func (p PodmanCreateArgs) ToShell(runtime string) string {
 	}
 	if p.Network != "" {
 		fmt.Fprintf(&b, "  --network %q \\\n", p.Network)
+	}
+	if p.IP != "" {
+		fmt.Fprintf(&b, "  --ip %q \\\n", p.IP)
+	}
+	for _, d := range p.DNS {
+		fmt.Fprintf(&b, "  --dns %q \\\n", d)
 	}
 	for _, e := range p.EnvNames {
 		fmt.Fprintf(&b, "  -e %s \\\n", e)

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# box net — show network policy and recent DNS query history.
+#
+# In safe/allowlist mode, CoreDNS logs all DNS queries to its stdout. This
+# script reads them via `podman logs agentbox-coredns-<project_id>`. The
+# container name is derived from AGENTBOX_PROJECT_ID which agentbox sets at
+# create time. In off/open mode, prints a brief status and exits.
+#
+# CoreDNS 1.14.3 log format (stdout):
+#   [INFO] <ip>:<port> - <id> "<class> <type> <name>." <proto> <rcode> <flags> <size> <duration>
+# Example:
+#   [INFO] 10.89.171.3:49152 - 1234 "A IN github.com. udp 38 false 512" NOERROR qr,rd,ra 54 0.007s
+
+set -u
+
+mode="${AGENTBOX_NETWORK:-n/a}"
+projid="${AGENTBOX_PROJECT_ID:-}"
+
+case "$mode" in
+  off)
+    printf "mode         off (no network)\n"
+    exit 0
+    ;;
+  open)
+    printf "mode         open (default bridge — no filtering active)\n"
+    exit 0
+    ;;
+  safe|allowlist)
+    printf "mode         %s\n" "$mode"
+    ;;
+  *)
+    printf "mode         %s (unknown)\n" "$mode"
+    exit 0
+    ;;
+esac
+
+# Show upstream for safe mode
+if [ "$mode" = "safe" ]; then
+  cfg=/etc/agentbox/config.toml
+  if [ -f "$cfg" ]; then
+    upstream=$(awk -F'=' '/^\[network\.safe\]/{found=1} found && /^upstream[[:space:]]*=/ { gsub(/[" ]/, "", $2); print $2; exit }' "$cfg" 2>/dev/null)
+    [ -n "$upstream" ] && printf "upstream     %s\n" "$upstream"
+  fi
+fi
+
+printf "\n"
+
+if [ -z "$projid" ]; then
+  printf "recent queries: (AGENTBOX_PROJECT_ID not set — cannot read sidecar logs)\n"
+  exit 0
+fi
+
+sidecar="agentbox-coredns-${projid}"
+
+# Check if podman is available (it's on the host, but we're inside the box).
+# The coredns sidecar name is deterministic; we read logs from the host via
+# the mounted docker/podman socket if available, or print a fallback message.
+if ! command -v podman >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+  printf "recent queries: (podman/docker not available inside box — run 'podman logs %s' on host)\n" "$sidecar"
+  exit 0
+fi
+
+# Prefer podman; fall back to docker
+runtime="podman"
+command -v podman >/dev/null 2>&1 || runtime="docker"
+
+printf "recent queries (last 50):\n"
+# Parse CoreDNS log format:
+#   [INFO] <ip>:<port> - <id> "<class> <type> <name>." <proto> <rcode> ...
+# We extract: timestamp (from [INFO] line), name, rcode
+"$runtime" logs --tail 200 "$sidecar" 2>/dev/null | grep '^\[INFO\]' | \
+  grep -v 'CoreDNS\|SIGTERM\|linux/' | \
+  tail -n 50 | \
+  awk '
+{
+  # Format: [INFO] ip:port - id "class type name." proto rcode ...
+  # Field 2 is ip:port, field 5 (inside quotes) is "class type name."
+  # Reconstruct by finding the quoted section
+  line = $0
+  name = ""
+  rcode = ""
+
+  # Extract name from inside quotes: "A IN github.com. udp ..."
+  if (match(line, /"[A-Z]+ [A-Z]+ [^ ]+\."/, arr)) {
+    # arr[0] = "A IN github.com."
+    split(arr[0], parts, " ")
+    name = parts[3]
+    # Remove trailing dot
+    sub(/\.$/, "", name)
+  }
+
+  # Extract rcode: word after closing quote + protocol info
+  if (match(line, /\." [a-z]+ [A-Z]+/, arr)) {
+    split(arr[0], parts, " ")
+    rcode = parts[3]
+  }
+
+  if (name == "") next
+
+  status = "ALLOWED"
+  if (rcode == "NXDOMAIN") status = "BLOCKED"
+  if (rcode == "SERVFAIL") status = "ERROR"
+
+  printf "  %-50s  %-10s  %s\n", name, rcode, status
+}
+'

@@ -17,17 +17,29 @@ import (
 	"github.com/nklisch/agentbox/internal/container"
 	"github.com/nklisch/agentbox/internal/exitcode"
 	"github.com/nklisch/agentbox/internal/kits"
+	"github.com/nklisch/agentbox/internal/network"
 	"github.com/nklisch/agentbox/internal/project"
 	"github.com/nklisch/agentbox/internal/runspec"
 	"github.com/nklisch/agentbox/internal/state"
 	"github.com/nklisch/agentbox/internal/zellij"
 )
 
+// NetworkManager is the port over the per-project network orchestrator.
+// Implemented by *network.Manager in production; a fake in tests.
+// Defined here to avoid lifecycle importing network's concrete type directly
+// while still keeping the dependency clean.
+type NetworkManager interface {
+	SpecFor(cfg config.Config, projectID string) network.Spec
+	Setup(spec network.Spec) (network.Info, error)
+	Teardown(spec network.Spec) error
+}
+
 // Lifecycle orchestrates container lifecycle: create/start/exec/ls/rm.
 type Lifecycle struct {
 	Cfg     config.Config
 	Runtime container.Runtime
 	Builder *kits.Builder
+	Network NetworkManager // nil means no-op (off/open modes work without it)
 	Home    string
 	Stdout  io.Writer
 	Stderr  io.Writer
@@ -43,12 +55,19 @@ type EnsureOpts struct {
 // EnsureBox guarantees a running box exists for the current $PWD's project.
 // If Fresh, removes any existing box + state first. Returns the resolved Box.
 func (l *Lifecycle) EnsureBox(opts EnsureOpts) (container.Box, error) {
-	l.degradeNetworkMode()
-
 	projID, projAbs, err := project.Resolve()
 	if err != nil {
 		return container.Box{}, exitcode.Wrap(exitcode.Generic, err)
 	}
+
+	// Setup network + sidecar before interacting with the box container.
+	// For running/stopped boxes, this is idempotent (sidecar already running).
+	netInfo, err := l.setupNetwork(projID)
+	if err != nil {
+		return container.Box{}, exitcode.Wrap(exitcode.Generic,
+			fmt.Errorf("network setup: %w", err))
+	}
+
 	name := container.ContainerName(projID)
 
 	if opts.Fresh {
@@ -75,7 +94,7 @@ func (l *Lifecycle) EnsureBox(opts EnsureOpts) (container.Box, error) {
 		}
 		return l.Runtime.Inspect(name)
 	case container.StatusMissing:
-		return l.createBox(projID, projAbs, opts)
+		return l.createBox(projID, projAbs, opts, netInfo)
 	default:
 		return container.Box{}, exitcode.New(exitcode.Generic,
 			"unexpected box status %q", box.Status)
@@ -84,7 +103,7 @@ func (l *Lifecycle) EnsureBox(opts EnsureOpts) (container.Box, error) {
 
 // createBox resolves the agent + kits, ensures the kit image exists,
 // writes session state, and creates+starts the container.
-func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts) (container.Box, error) {
+func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo network.Info) (container.Box, error) {
 	agent := l.Cfg.DefaultAgent
 	if opts.Agent != "" {
 		agent = opts.Agent
@@ -131,6 +150,7 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts) (containe
 		HomeDir:     l.Home,
 		StateDir:    stateDir,
 		Created:     time.Now(),
+		SidecarDNS:  netInfo.SidecarDNS, // CoreDNS sidecar IP for --dns (safe/allowlist)
 	}
 	args, err := runspec.BuildPodmanCreateArgs(l.Cfg, in)
 	if err != nil {
@@ -154,16 +174,22 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts) (containe
 	return l.Runtime.Inspect(args.Name)
 }
 
-// degradeNetworkMode prints a warning and falls back to "open" when safe/allowlist
-// is configured, because those modes require Phase 6 infrastructure.
-// This mutates l.Cfg (value receiver stores, caller must use method receiver).
-func (l *Lifecycle) degradeNetworkMode() {
-	if l.Cfg.Network.Mode == "safe" || l.Cfg.Network.Mode == "allowlist" {
-		fmt.Fprintf(l.Stderr,
-			"warning: network mode %q is not yet implemented; falling back to 'open' for this run (Phase 6 will add it)\n",
-			l.Cfg.Network.Mode)
-		l.Cfg.Network.Mode = "open"
+// setupNetwork brings up the per-project network + CoreDNS sidecar, returning
+// the Info that runspec.BuildInput needs (network name + DNS overrides).
+// Replaces Phase 3's degradeNetworkMode warning + fallback.
+// When Network is nil (should not happen in production), falls back gracefully.
+func (l *Lifecycle) setupNetwork(projectID string) (network.Info, error) {
+	if l.Network == nil {
+		// Fallback: no network manager — use open/none per mode.
+		switch l.Cfg.Network.Mode {
+		case "off":
+			return network.Info{NetworkName: "none"}, nil
+		default:
+			return network.Info{NetworkName: "bridge"}, nil
+		}
 	}
+	spec := l.Network.SpecFor(l.Cfg, projectID)
+	return l.Network.Setup(spec)
 }
 
 // writeEffectiveConfig serialises Cfg as TOML and writes to the session dir.
@@ -442,7 +468,9 @@ type LsFilter struct {
 	Kit     string // membership in Box.Kits
 }
 
-// Ls returns boxes matching the filter.
+// Ls returns boxes matching the filter. Always filters to role=box (or
+// unlabeled, for backward compat with pre-Phase-6 boxes) so sidecar and
+// netfilter containers don't appear in the user-facing list.
 func (l *Lifecycle) Ls(f LsFilter) ([]container.Box, error) {
 	boxes, err := l.Runtime.Ls(f.All)
 	if err != nil {
@@ -450,6 +478,11 @@ func (l *Lifecycle) Ls(f LsFilter) ([]container.Box, error) {
 	}
 	out := boxes[:0]
 	for _, b := range boxes {
+		// Filter out sidecar/netfilter containers by role label.
+		// Empty role = pre-Phase-6 box; treat as "box" for backward compat.
+		if b.Role != "" && b.Role != "box" {
+			continue
+		}
 		if f.Project != "" && b.Project != f.Project {
 			continue
 		}
@@ -489,8 +522,18 @@ func (l *Lifecycle) Rm(opts RmOpts) error {
 }
 
 func (l *Lifecycle) rmOne(projID string, keepState bool) error {
+	// Remove the user-facing box container.
 	if err := l.Runtime.Rm(container.ContainerName(projID), true); err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
+	}
+	// Teardown the per-project network + sidecar (idempotent).
+	if l.Network != nil {
+		spec := l.Network.SpecFor(l.Cfg, projID)
+		if err := l.Network.Teardown(spec); err != nil {
+			// Non-fatal: log but don't fail the remove. The box container is
+			// already gone; a stale sidecar/network is recoverable.
+			fmt.Fprintf(l.Stderr, "warning: network teardown for %s: %v\n", projID, err)
+		}
 	}
 	if !keepState {
 		if err := state.RemoveSession(projID); err != nil {
@@ -505,12 +548,20 @@ func (l *Lifecycle) rmAll(force, keepState bool) error {
 	if err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
-	if !force && len(boxes) > 0 {
+	// Filter to role=box only — sidecar/netfilter containers are cleaned up
+	// per-box by Network.Teardown called from rmOne.
+	var userBoxes []container.Box
+	for _, b := range boxes {
+		if b.Role == "" || b.Role == "box" {
+			userBoxes = append(userBoxes, b)
+		}
+	}
+	if !force && len(userBoxes) > 0 {
 		return exitcode.New(exitcode.InvalidArgs,
-			"would remove %d box(es); pass --force to skip confirmation", len(boxes))
+			"would remove %d box(es); pass --force to skip confirmation", len(userBoxes))
 	}
 	var firstErr error
-	for _, b := range boxes {
+	for _, b := range userBoxes {
 		if err := l.rmOne(b.ProjectID, keepState); err != nil && firstErr == nil {
 			firstErr = err
 		}

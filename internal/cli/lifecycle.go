@@ -9,6 +9,7 @@ import (
 	"github.com/nklisch/agentbox/internal/container"
 	"github.com/nklisch/agentbox/internal/kits"
 	"github.com/nklisch/agentbox/internal/lifecycle"
+	"github.com/nklisch/agentbox/internal/network"
 	"github.com/nklisch/agentbox/internal/version"
 )
 
@@ -35,6 +36,7 @@ var newLifecycle = func(cfg config.Config) (*lifecycle.Lifecycle, error) {
 		Cfg:     cfg,
 		Runtime: rt,
 		Builder: builder,
+		Network: &network.Manager{Runtime: rt},
 		Home:    home,
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,

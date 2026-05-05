@@ -52,6 +52,12 @@ func (r *PodmanRuntime) Create(args runspec.PodmanCreateArgs) error {
 	if args.Network != "" {
 		argv = append(argv, "--network", args.Network)
 	}
+	if args.IP != "" {
+		argv = append(argv, "--ip", args.IP)
+	}
+	for _, d := range args.DNS {
+		argv = append(argv, "--dns", d)
+	}
 	for _, e := range args.EnvNames {
 		argv = append(argv, "-e", e)
 	}
@@ -131,6 +137,7 @@ func boxFromLabels(labels map[string]string, running bool, created string) Box {
 		CWD:       labels["agentbox.cwd"],
 		Agent:     labels["agentbox.agent"],
 		KitImage:  labels["agentbox.kit_image"],
+		Role:      labels["agentbox.role"],
 	}
 	if k := labels["agentbox.kits"]; k != "" {
 		box.Kits = strings.Split(k, ",")
@@ -211,6 +218,58 @@ func (r *PodmanRuntime) Ls(all bool) ([]Box, error) {
 		boxes = append(boxes, box)
 	}
 	return boxes, nil
+}
+
+// NetworkCreate creates a bridge network with the given CIDR subnet.
+// Runs `<bin> network create --driver bridge --subnet <subnet> <name>`.
+func (r *PodmanRuntime) NetworkCreate(name, subnet string) error {
+	cmd := exec.Command(r.Bin, "network", "create",
+		"--driver", "bridge", "--subnet", subnet, name)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return fmt.Errorf("%s network create: %w", r.Bin, err)
+		}
+		return err
+	}
+	return nil
+}
+
+// NetworkRm removes a named network. Idempotent: missing network returns nil.
+// Runs `<bin> network rm <name>`.
+func (r *PodmanRuntime) NetworkRm(name string) error {
+	cmd := exec.Command(r.Bin, "network", "rm", name)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			// Exit code 1 typically means network not found — treat as no-op.
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// NetworkExists reports whether a network with the given name exists.
+// Runs `<bin> network exists <name>`; exit 0 = present, non-zero = absent.
+// Note: `network exists` is podman-specific; docker uses `network inspect`.
+// Phase 8's docker fallback will add a docker-compatible implementation.
+func (r *PodmanRuntime) NetworkExists(name string) (bool, error) {
+	cmd := exec.Command(r.Bin, "network", "exists", name)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // Rm removes a container. force=true uses --force.

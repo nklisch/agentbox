@@ -446,3 +446,86 @@ func TestBuildPodmanCreateArgs_ExtraMount_Valid(t *testing.T) {
 		t.Errorf("extra mount /data:/data:ro not found in %+v", args.Mounts)
 	}
 }
+
+// ---- Phase 6: DNS / SidecarDNS tests ----
+
+func TestBuildPodmanCreateArgs_SidecarDNS_Populated(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Network.Mode = "safe"
+	in := defaultInput()
+	in.SidecarDNS = []string{"10.89.171.2"}
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	if len(args.DNS) != 1 || args.DNS[0] != "10.89.171.2" {
+		t.Errorf("DNS = %v, want [10.89.171.2]", args.DNS)
+	}
+}
+
+func TestBuildPodmanCreateArgs_SidecarDNS_Empty(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Network.Mode = "open"
+	in := defaultInput()
+	// No SidecarDNS set
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	if len(args.DNS) != 0 {
+		t.Errorf("DNS should be empty for open mode, got %v", args.DNS)
+	}
+}
+
+func TestToShell_ContainsDNSLine(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.SidecarDNS = []string{"10.89.7.2"}
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	shell := args.ToShell("podman")
+	if !strings.Contains(shell, `--dns "10.89.7.2"`) {
+		t.Errorf("ToShell output missing --dns line:\n%s", shell)
+	}
+}
+
+func TestBuildPodmanCreateArgs_RoleLabel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+
+	var found bool
+	for _, kv := range args.Labels {
+		if kv.Key == "agentbox.role" && kv.Value == "box" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected agentbox.role=box label, not found in %+v", args.Labels)
+	}
+}
+
+func TestBuildPodmanCreateArgs_EnvVars_CountUpdated(t *testing.T) {
+	// The agentbox.role label was added — update env var count test.
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	// 8 env vars defined in runspec (unchanged by Phase 6 additions to labels)
+	if len(args.EnvVars) != 8 {
+		t.Errorf("expected 8 EnvVars, got %d: %+v", len(args.EnvVars), args.EnvVars)
+	}
+}

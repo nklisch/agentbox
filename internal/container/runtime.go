@@ -33,4 +33,14 @@ type Runtime interface {
 	// Rm removes a container. force=true sends SIGKILL first if running.
 	// Idempotent: missing container returns nil.
 	Rm(name string, force bool) error
+
+	// NetworkCreate creates a bridge network with the given name and CIDR subnet.
+	// Idempotent in the sense that callers check NetworkExists first.
+	NetworkCreate(name, subnet string) error
+
+	// NetworkRm removes a named network. Idempotent: missing network returns nil.
+	NetworkRm(name string) error
+
+	// NetworkExists reports whether a network with the given name exists.
+	NetworkExists(name string) (bool, error)
 }

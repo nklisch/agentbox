@@ -236,6 +236,9 @@ func (r *fakeRuntime) Rm(name string, force bool) error {
 	delete(r.boxes, name)
 	return nil
 }
+func (r *fakeRuntime) NetworkCreate(name, subnet string) error { return nil }
+func (r *fakeRuntime) NetworkRm(name string) error             { return nil }
+func (r *fakeRuntime) NetworkExists(name string) (bool, error) { return false, nil }
 
 // projectID computes the 12-char project ID for a path (matches project.IDFromPath).
 func projectID(path string) string {

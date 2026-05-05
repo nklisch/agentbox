@@ -24,6 +24,9 @@ type Box struct {
 	KitImage  string    `json:"kit_image"`
 	Status    Status    `json:"status"`
 	Created   time.Time `json:"created"`
+	// Role is the agentbox.role label value: "box", "coredns", or "netfilter".
+	// Empty string means unlabeled (pre-Phase-6 box, treated as "box").
+	Role string `json:"role"`
 }
 
 // ContainerName returns the canonical podman container name for a box.
