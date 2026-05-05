@@ -17,7 +17,7 @@
 | 3 | Container lifecycle — run / shell / exec / attach / ls / rm | done | 2026-05-05 |
 | 4 | Zellij-in-box, layout generation, `box` helpers | done | 2026-05-05 |
 | 5 | Runtime kits + agent kits + agent integration | done | 2026-05-05 |
-| 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | active | — |
+| 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | active (Part A done) | — |
 | 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | pending | — |
 | 8 | macOS support, Docker fallback, completion, ship | pending | — |
 
@@ -87,6 +87,58 @@ Implementation stats:
   (`18473b1`).
 
 Part C of Phase 5 remains (agent kits: claude, codex, opencode + config defaults).
+
+---
+
+## Phase 6 Part A Notes
+
+What's now possible that wasn't before:
+- `agentbox run --network safe --no-attach` creates a per-project podman
+  network plus a CoreDNS sidecar; DNS queries from inside the box flow
+  through the sidecar to Quad9 (or whatever upstream is configured).
+- `agentbox run --network allowlist` creates the same shape but the
+  Corefile only forwards explicit zones; everything else returns NXDOMAIN.
+- The default `network.mode = "safe"` no longer warns + falls back to
+  `"open"`. `lifecycle.degradeNetworkMode` is gone.
+- `box net` (the dispatcher routes correctly to `box-net` now) prints
+  the mode + tells users to `podman logs <coredns-sidecar>` from the host
+  for the query history (CoreDNS 1.14.3's `log` plugin is stdout-only —
+  see deviation below).
+- `agentbox ls` shows only user-facing boxes (filter `agentbox.role=box`);
+  sidecars are hidden.
+- `agentbox rm` cleans up the agentbox container + the CoreDNS sidecar
+  + the per-project podman network in the right order.
+
+CoreDNS pinned: `docker.io/coredns/coredns:1.14.3` (latest as of 2026-04-22,
+verified via Docker Hub API).
+
+Notable design deviations:
+- **Corefile log plugin is stdout-only in 1.14.3.** Design said
+  `log /var/log/coredns/queries.log { class denial success }`. Reality:
+  `log . { class all }`; queries go to container stdout. `box-net`
+  reads via `podman logs <sidecar>` instead of from a mounted file.
+  Phase 6 Part B's iptables daemon will tail `podman logs --follow`
+  output (live stream) rather than a file.
+- **`template ANY ANY` → `template IN ANY`** — qclass and qtype are
+  separate tokens in the current plugin syntax.
+- **`class denial success` → `class all`** — `denial` doesn't include
+  NXDOMAIN; `all` does.
+- **Corefile mode 0644** (not 0600) so CoreDNS's `nonroot:nonroot` user
+  can read it in rootless podman.
+
+Subnet derivation: `10.89.<X>.0/24` where X = first 2 hex chars of
+project_id parsed as uint8. Sidecar at `10.89.X.2`. Static IP via `--ip`
+on the custom bridge; works without `--ipam-driver` on rootless podman.
+
+Implementation stats:
+- 1 Sonnet agent. 7 new files in `internal/network/` (~600 LOC + tests),
+  edits to runspec/container/lifecycle/cli/builtinkits.
+- `Box` struct gained a `Role` field; `Lifecycle.Ls` filters to role=box.
+- Plus 1 small dispatcher fix (`box` dispatcher routes `net` → `box-net`).
+- Commits: design (`9351348`), Part A impl (`a70e016`), dispatcher fix
+  (`3a2b63d`).
+
+Part B (iptables + ipset egress filter) remains.
 
 ---
 
