@@ -1,6 +1,7 @@
 package doctor_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nklisch/agentbox/internal/config"
@@ -128,5 +129,67 @@ func TestRun_AnyFail_WithMissingRuntime(t *testing.T) {
 
 	if !result.AnyFail() {
 		t.Error("AnyFail() = false, want true when runtime binary is missing")
+	}
+}
+
+// ---- Phase 7: containersConfigCheck tests ----
+
+func findCheck(result doctor.Result, name string) *doctor.Check {
+	for i := range result.Checks {
+		if result.Checks[i].Name == name {
+			return &result.Checks[i]
+		}
+	}
+	return nil
+}
+
+func TestContainersConfigCheck_NoKit_IsOK(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.DefaultKits = []string{"polyglot"}
+	cfg.Containers.Enable = false
+	result := doctor.Run(cfg)
+
+	c := findCheck(result, "containers-config")
+	if c == nil {
+		t.Fatal("containers-config check not found")
+	}
+	if c.Status != doctor.StatusOK {
+		t.Errorf("status = %q, want OK when containers kit absent", c.Status)
+	}
+}
+
+func TestContainersConfigCheck_KitAndEnableTrue_IsOK(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.DefaultKits = []string{"containers"}
+	cfg.Containers.Enable = true
+	result := doctor.Run(cfg)
+
+	c := findCheck(result, "containers-config")
+	if c == nil {
+		t.Fatal("containers-config check not found")
+	}
+	if c.Status != doctor.StatusOK {
+		t.Errorf("status = %q, want OK when containers kit present and Enable=true", c.Status)
+	}
+}
+
+func TestContainersConfigCheck_KitButEnableFalse_IsWarn(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.DefaultKits = []string{"containers"}
+	cfg.Containers.Enable = false
+	result := doctor.Run(cfg)
+
+	c := findCheck(result, "containers-config")
+	if c == nil {
+		t.Fatal("containers-config check not found")
+	}
+	if c.Status != doctor.StatusWarn {
+		t.Errorf("status = %q, want WARN when containers kit present but Enable=false", c.Status)
+	}
+	if !strings.Contains(c.Message, "enable=true") {
+		t.Errorf("message should mention 'enable=true', got: %q", c.Message)
 	}
 }

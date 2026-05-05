@@ -1,0 +1,4 @@
+name        = "containers"
+description = "Nested rootless podman + buildah + skopeo + docker-compose"
+depends_on  = ["base"]
+provides    = ["containers"]

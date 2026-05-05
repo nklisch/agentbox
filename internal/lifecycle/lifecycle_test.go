@@ -1063,3 +1063,49 @@ func TestLs_UnlabeledBoxIncluded(t *testing.T) {
 		t.Errorf("expected 1 box (unlabeled pre-Phase-6), got %d", len(boxes))
 	}
 }
+
+// ---- Phase 7: containers seccomp wiring tests ----
+
+func TestEnsureBox_ContainersEnable_WritesSeccompProfile(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	cfg.Containers.Enable = true
+	setupProject(t)
+
+	// newTestLifecycle calls isolateState which sets XDG_DATA_HOME to a temp dir.
+	// seccomp.EnsureContainersProfile uses state.Dir() which reads XDG_DATA_HOME.
+	l := newTestLifecycle(t, rt, cfg, nil)
+
+	_, err := l.EnsureBox(lifecycle.EnsureOpts{})
+	if err != nil {
+		t.Fatalf("EnsureBox with Containers.Enable=true: %v", err)
+	}
+
+	// Verify the seccomp profile was written to the state dir.
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	seccompPath := filepath.Join(dataHome, "agentbox", "seccomp", "containers.json")
+	if _, err := os.Stat(seccompPath); err != nil {
+		t.Errorf("expected seccomp profile at %s, stat error: %v", seccompPath, err)
+	}
+}
+
+func TestEnsureBox_ContainersDisable_NoSeccompProfile(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	cfg.Containers.Enable = false
+	setupProject(t)
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+
+	_, err := l.EnsureBox(lifecycle.EnsureOpts{})
+	if err != nil {
+		t.Fatalf("EnsureBox with Containers.Enable=false: %v", err)
+	}
+
+	// Verify the seccomp profile was NOT written when containers are disabled.
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	seccompPath := filepath.Join(dataHome, "agentbox", "seccomp", "containers.json")
+	if _, err := os.Stat(seccompPath); err == nil {
+		t.Errorf("seccomp profile should not exist when Containers.Enable=false, but found at %s", seccompPath)
+	}
+}

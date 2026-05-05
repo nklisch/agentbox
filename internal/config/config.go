@@ -81,8 +81,7 @@ func DefaultConfig() Config {
 	return Config{
 		Runtime:      "podman",
 		DefaultAgent: "claude",
-		// "containers" returns in Phase 7 (nested rootless podman support).
-		DefaultKits: []string{"polyglot", "claude"},
+		DefaultKits: []string{"polyglot", "containers", "claude"},
 		Network: Network{
 			Mode: "safe",
 			Safe: NetworkSafe{

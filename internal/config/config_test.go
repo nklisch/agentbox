@@ -71,12 +71,17 @@ func TestDefaultConfig_AgentsHasCodex(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig_DefaultKitsExcludesContainers(t *testing.T) {
+func TestDefaultConfig_DefaultKitsIncludesContainers(t *testing.T) {
 	cfg := config.DefaultConfig()
+	found := false
 	for _, k := range cfg.DefaultKits {
 		if k == "containers" {
-			t.Error("DefaultConfig().DefaultKits should not contain 'containers' until Phase 7")
+			found = true
+			break
 		}
+	}
+	if !found {
+		t.Errorf("DefaultConfig().DefaultKits = %v, want 'containers' to be present (Phase 7)", cfg.DefaultKits)
 	}
 }
 

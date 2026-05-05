@@ -20,6 +20,7 @@ import (
 	"github.com/nklisch/agentbox/internal/network"
 	"github.com/nklisch/agentbox/internal/project"
 	"github.com/nklisch/agentbox/internal/runspec"
+	"github.com/nklisch/agentbox/internal/seccomp"
 	"github.com/nklisch/agentbox/internal/state"
 	"github.com/nklisch/agentbox/internal/zellij"
 )
@@ -140,6 +141,17 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 		return container.Box{}, exitcode.Wrap(exitcode.Generic, err)
 	}
 
+	// If containers.enable, materialize the seccomp profile on disk so the
+	// runtime spec's bind-mount has a target.
+	var seccompPath string
+	if l.Cfg.Containers.Enable {
+		p, err := seccomp.EnsureContainersProfile()
+		if err != nil {
+			return container.Box{}, exitcode.Wrap(exitcode.Generic, err)
+		}
+		seccompPath = p
+	}
+
 	// Build runspec args and create.
 	in := runspec.BuildInput{
 		ProjectID:   projID,
@@ -151,6 +163,7 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 		StateDir:    stateDir,
 		Created:     time.Now(),
 		SidecarDNS:  netInfo.SidecarDNS, // CoreDNS sidecar IP for --dns (safe/allowlist)
+		SeccompPath: seccompPath,
 	}
 	args, err := runspec.BuildPodmanCreateArgs(l.Cfg, in)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/nklisch/agentbox/internal/lifecycle"
 	"github.com/nklisch/agentbox/internal/project"
 	"github.com/nklisch/agentbox/internal/runspec"
+	"github.com/nklisch/agentbox/internal/seccomp"
 	"github.com/nklisch/agentbox/internal/state"
 )
 
@@ -106,6 +107,17 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
 
+	// If containers.enable, materialize the seccomp profile so the dry-run
+	// output accurately shows the bind-mount (same path as the live path).
+	var seccompPath string
+	if c.Containers.Enable {
+		p, err := seccomp.EnsureContainersProfile()
+		if err != nil {
+			return exitcode.Wrap(exitcode.Generic, err)
+		}
+		seccompPath = p
+	}
+
 	in := runspec.BuildInput{
 		ProjectID:   id,
 		ProjectAbs:  abs,
@@ -115,6 +127,7 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 		HomeDir:     home,
 		StateDir:    stateDir,
 		Created:     time.Now(),
+		SeccompPath: seccompPath,
 	}
 
 	rs, err := runspec.BuildPodmanCreateArgs(c, in)

@@ -529,3 +529,131 @@ func TestBuildPodmanCreateArgs_EnvVars_CountUpdated(t *testing.T) {
 		t.Errorf("expected 8 EnvVars, got %d: %+v", len(args.EnvVars), args.EnvVars)
 	}
 }
+
+// ---- Phase 7: CapAdd + Devices + seccomp mount tests ----
+
+func TestBuildPodmanCreateArgs_ContainersEnable_AddsCapAndDevices(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Containers.Enable = true
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+
+	// CapAdd should have SETUID and SETGID from cfg.Containers.ExtraCaps default.
+	if len(args.CapAdd) != 2 {
+		t.Fatalf("expected 2 CapAdd entries, got %d: %v", len(args.CapAdd), args.CapAdd)
+	}
+	capMap := make(map[string]bool)
+	for _, c := range args.CapAdd {
+		capMap[c] = true
+	}
+	for _, want := range []string{"SETUID", "SETGID"} {
+		if !capMap[want] {
+			t.Errorf("CapAdd missing %q; got %v", want, args.CapAdd)
+		}
+	}
+
+	// Devices should have /dev/fuse from cfg.Containers.ExtraDevices default.
+	if len(args.Devices) != 1 || args.Devices[0] != "/dev/fuse" {
+		t.Errorf("Devices = %v, want [\"/dev/fuse\"]", args.Devices)
+	}
+}
+
+func TestBuildPodmanCreateArgs_ContainersDisable_EmptyCapAndDevices(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Containers.Enable = false
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	if len(args.CapAdd) != 0 {
+		t.Errorf("CapAdd should be empty when Containers.Enable=false, got %v", args.CapAdd)
+	}
+	if len(args.Devices) != 0 {
+		t.Errorf("Devices should be empty when Containers.Enable=false, got %v", args.Devices)
+	}
+}
+
+func TestBuildPodmanCreateArgs_ContainersEnable_NoSeccompMountWithoutPath(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Containers.Enable = true
+	in := defaultInput()
+	// SeccompPath is empty — lifecycle is responsible for populating it.
+	// Without it, no seccomp mount should appear.
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	for _, m := range args.Mounts {
+		if m.Target == "/etc/agentbox/seccomp/containers.json" {
+			t.Errorf("unexpected seccomp mount without SeccompPath: %+v", m)
+		}
+	}
+}
+
+func TestBuildPodmanCreateArgs_ContainersEnable_WithSeccompPath_AddsMount(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Containers.Enable = true
+	in := defaultInput()
+	in.SeccompPath = "/host/state/seccomp/containers.json"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	var found bool
+	for _, m := range args.Mounts {
+		if m.Source == in.SeccompPath &&
+			m.Target == "/etc/agentbox/seccomp/containers.json" &&
+			m.Mode == "ro" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected seccomp ro mount {%s:/etc/agentbox/seccomp/containers.json:ro}, not found in %+v",
+			in.SeccompPath, args.Mounts)
+	}
+}
+
+func TestToShell_ContainersEnable_HasCapAddAndDevice(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Containers.Enable = true
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	shell := args.ToShell("podman")
+
+	for _, want := range []string{
+		"--cap-add SETUID",
+		"--cap-add SETGID",
+		`--device "/dev/fuse"`,
+	} {
+		if !strings.Contains(shell, want) {
+			t.Errorf("ToShell missing %q:\n%s", want, shell)
+		}
+	}
+
+	// Order: cap-drop before cap-add before security-opt.
+	dropIdx := strings.Index(shell, "--cap-drop ALL")
+	addIdx := strings.Index(shell, "--cap-add SETUID")
+	secoptIdx := strings.Index(shell, "--security-opt seccomp=")
+	if dropIdx < 0 || addIdx < 0 || secoptIdx < 0 {
+		t.Fatalf("missing expected flags in ToShell output:\n%s", shell)
+	}
+	if dropIdx >= addIdx {
+		t.Errorf("--cap-drop (idx %d) should appear before --cap-add (idx %d)", dropIdx, addIdx)
+	}
+	if addIdx >= secoptIdx {
+		t.Errorf("--cap-add (idx %d) should appear before --security-opt (idx %d)", addIdx, secoptIdx)
+	}
+}

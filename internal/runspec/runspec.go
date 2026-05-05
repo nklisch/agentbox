@@ -33,7 +33,9 @@ type PodmanCreateArgs struct {
 	Memory   string
 	PIDs     int
 	CapDrop  []string
+	CapAdd   []string // --cap-add <X>; populated when Containers.Enable
 	SecOpt   []string
+	Devices  []string // --device <X>; populated when Containers.Enable
 	Network  string
 	IP       string   // --ip <addr>; used by the CoreDNS sidecar for stable addressing
 	DNS      []string // --dns <ip> entries; Phase 6 sets to [coredns-sidecar-ip] for safe/allowlist
@@ -59,6 +61,7 @@ type BuildInput struct {
 	StateDir    string
 	Created     time.Time
 	SidecarDNS  []string // IPs to pass as --dns; set by lifecycle from network.Info.SidecarDNS
+	SeccompPath string   // host path to bundled containers.json; populated by lifecycle when Containers.Enable
 }
 
 // KitImageTag returns the canonical image tag for a kit list.
@@ -177,16 +180,22 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 	args.EnvNames = append(args.EnvNames, cfg.Secrets.Passthrough...)
 
 	if cfg.Containers.Enable {
-		// SPEC.md "Conditional flags (nested containers)".
-		// Devices added at the runtime layer (not here in P1; Phase 7 wires this).
-		// We emit the security-opt entries so the dry-run is honest.
+		// Re-grant the small slice of caps + devices nested rootless podman needs.
+		// CapDrop ALL stays; CapAdd layers specific caps back on top.
+		args.CapAdd = append(args.CapAdd, cfg.Containers.ExtraCaps...)
+		args.Devices = append(args.Devices, cfg.Containers.ExtraDevices...)
 		args.SecOpt = append(args.SecOpt,
 			"seccomp=/etc/agentbox/seccomp/containers.json",
 			"unmask=/proc/sys/net/ipv4",
 		)
-		// CapDrop ALL stays; Phase 7's containers kit re-grants SETUID/SETGID
-		// via --cap-add at the runtime layer. P1 emits the dropped state and
-		// leaves Phase 7 to add the cap-add lines.
+		// Seccomp profile bind-mount: host path → in-container path referenced by SecOpt.
+		if in.SeccompPath != "" {
+			args.Mounts = append(args.Mounts, Mount{
+				Source: in.SeccompPath,
+				Target: "/etc/agentbox/seccomp/containers.json",
+				Mode:   "ro",
+			})
+		}
 	}
 
 	return args, nil
@@ -219,6 +228,12 @@ func (p PodmanCreateArgs) ToShell(runtime string) string {
 	}
 	for _, c := range p.CapDrop {
 		fmt.Fprintf(&b, "  --cap-drop %s \\\n", c)
+	}
+	for _, c := range p.CapAdd {
+		fmt.Fprintf(&b, "  --cap-add %s \\\n", c)
+	}
+	for _, d := range p.Devices {
+		fmt.Fprintf(&b, "  --device %q \\\n", d)
 	}
 	for _, s := range p.SecOpt {
 		fmt.Fprintf(&b, "  --security-opt %s \\\n", s)

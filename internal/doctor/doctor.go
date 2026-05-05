@@ -51,6 +51,7 @@ func Run(cfg config.Config) Result {
 		ipsetCheck(),
 		sudoCheck(),
 		corednsImageCheck(cfg.Runtime),
+		containersConfigCheck(cfg),
 	}
 	return Result{Checks: checks}
 }
@@ -148,6 +149,33 @@ func sudoCheck() Check {
 				"(or use visudo). Required for safe mode with block_direct_ip=true and allowlist mode.", msg)}
 	}
 	return Check{Name: name, Status: StatusOK, Message: "passwordless sudo for iptables confirmed"}
+}
+
+// containersConfigCheck warns when the containers kit is in DefaultKits but
+// Containers.Enable is false — the most common misconfiguration for nested
+// rootless podman support.
+func containersConfigCheck(cfg config.Config) Check {
+	const name = "containers-config"
+	hasKit := false
+	for _, k := range cfg.DefaultKits {
+		if k == "containers" {
+			hasKit = true
+			break
+		}
+	}
+	if !hasKit {
+		return Check{Name: name, Status: StatusOK,
+			Message: "containers kit not in default_kits; nested-container support disabled by default"}
+	}
+	if cfg.Containers.Enable {
+		return Check{Name: name, Status: StatusOK,
+			Message: "containers kit + runtime.containers.enable=true; nested rootless ready"}
+	}
+	return Check{Name: name, Status: StatusWarn,
+		Message: "containers kit is in default_kits but runtime.containers.enable=false; " +
+			"nested docker/podman commands inside boxes will fail. Set [containers] enable=true " +
+			"in ~/.config/agentbox/config.toml to grant the runtime privileges (requires understanding " +
+			"the security trade-offs documented in SPEC.md)."}
 }
 
 // corednsImageCheck verifies that the pinned CoreDNS image is already pulled.

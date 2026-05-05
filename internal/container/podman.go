@@ -46,6 +46,12 @@ func (r *PodmanRuntime) Create(args runspec.PodmanCreateArgs) error {
 	for _, c := range args.CapDrop {
 		argv = append(argv, "--cap-drop", c)
 	}
+	for _, c := range args.CapAdd {
+		argv = append(argv, "--cap-add", c)
+	}
+	for _, d := range args.Devices {
+		argv = append(argv, "--device", d)
+	}
 	for _, s := range args.SecOpt {
 		argv = append(argv, "--security-opt", s)
 	}
