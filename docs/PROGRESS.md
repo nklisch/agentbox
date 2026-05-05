@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Started:** 2026-05-04
 **Last updated:** 2026-05-05
-**Phases since last refactor:** 4
+**Phases since last refactor:** 5
 **Total refactor passes:** 0
 
 ---
@@ -16,8 +16,8 @@
 | 2 | Kit pipeline, base kit, `agentbox build` | done | 2026-05-05 |
 | 3 | Container lifecycle — run / shell / exec / attach / ls / rm | done | 2026-05-05 |
 | 4 | Zellij-in-box, layout generation, `box` helpers | done | 2026-05-05 |
-| 5 | Runtime kits + agent kits + agent integration | active (Parts A+B done) | — |
-| 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | pending | — |
+| 5 | Runtime kits + agent kits + agent integration | done | 2026-05-05 |
+| 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | active | — |
 | 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | pending | — |
 | 8 | macOS support, Docker fallback, completion, ship | pending | — |
 
@@ -36,6 +36,12 @@
 - **Investigation:** Phase 4 added one new package (`internal/zellij`) — pure string output, no duplication with existing code. Lifecycle grew Run/Shell/Attach into zellij paths but they share `zellijAttach` already. `box-info` script bash growth (~80 LOC) is a single-file concern, not library duplication. `runspec` env-vars list is now 8 entries; could be tabularized but currently readable.
 - **Decision:** Skip. Wait for Phase 5 to re-evaluate; Phase 5 ships ~10 kits and may surface real patterns worth extracting (kit-install-helpers, version-pinning conventions, etc.).
 - **Counter NOT reset.** phases_since_refactor stays at 4. Next gate fires at 5 (Phase 5's own gate, as designed).
+
+### After Phase 5: gate triggered, refactor skipped (third time)
+- **Trigger:** phases_since_refactor=5.
+- **Investigation:** Phase 5 added 10 new kit directories (40 files) but no new Go packages. The bash duplication between Part A's kits and polyglot's install.sh is real (~200 lines repeated) BUT intentional per KITS.md "No COPY from host" — the kit format requires self-contained kit dirs; we cannot `source` across kits or share helper scripts. Extracting bash helpers would violate the kit format contract that users follow when authoring custom kits. Go side: no new duplication. The version-pinning convention is now well-established across 7 install.sh files; that's doc territory, not refactor.
+- **Decision:** Skip. Wait for Phase 6 (network policy — CoreDNS + iptables + custom podman network) to re-evaluate. Phase 6 introduces fundamentally new infrastructure; if patterns repeat with Phase 7's `containers` kit work, refactor that round.
+- **Counter NOT reset.** phases_since_refactor stays at 5. Next gate at 6.
 
 ---
 
@@ -81,6 +87,43 @@ Implementation stats:
   (`18473b1`).
 
 Part C of Phase 5 remains (agent kits: claude, codex, opencode + config defaults).
+
+---
+
+## Phase 5 Part C Notes
+
+What's now possible that wasn't before:
+- `agentbox build claude|codex|opencode` — three new agent kits, each
+  installs the agent's CLI in the box.
+- **`agentbox run --no-attach` works end-to-end with no user override.**
+  The default config (`default_agent="claude"`, `default_kits=["polyglot","claude"]`)
+  resolves cleanly and the box starts. `claude` binary is on PATH inside.
+- `DefaultConfig.Agents` now has all three: claude, codex, opencode.
+
+Verified npm packages + YOLO flags (2026-05-05):
+- `@anthropic-ai/claude-code@2.1.128`, binary `claude`,
+  flag `--dangerously-skip-permissions` (unchanged from Phase 1).
+- `@openai/codex@0.128.0`, binary `codex`,
+  flag `--dangerously-bypass-approvals-and-sandbox` (applied to DefaultConfig).
+- `sst/opencode v1.14.37`, binary `opencode`. **No root-level YOLO flag
+  exists** — `--dangerously-skip-permissions` only applies to
+  `opencode run` subcommand, not the TUI command. `Cmd` left as
+  `["opencode"]`. Users who want auto-yolo for opencode can configure
+  the agent invocation manually.
+
+Notable design deviations:
+- Asset format for opencode releases is `.tar.gz`, not `.zip` as the design
+  suggested. Verified at write time.
+- `sst/opencode` repo redirects to `anomalyco/opencode` upstream; the legacy
+  release URLs still work via redirect. Pinned to 1.14.37.
+- `DefaultConfig.DefaultKits` trimmed from `["polyglot","containers","claude"]`
+  to `["polyglot","claude"]` until Phase 7 ships the containers kit.
+
+Implementation stats:
+- 1 Sonnet agent, 12 files (3 kits × 4 files) + config.go edit + config_test.go.
+- Commit: `9887c55`.
+
+Phase 5 is fully closed. The agentbox default flow now works out of the box.
 
 ---
 
