@@ -16,7 +16,7 @@
 | 2 | Kit pipeline, base kit, `agentbox build` | done | 2026-05-05 |
 | 3 | Container lifecycle — run / shell / exec / attach / ls / rm | done | 2026-05-05 |
 | 4 | Zellij-in-box, layout generation, `box` helpers | done | 2026-05-05 |
-| 5 | Runtime kits + agent kits + agent integration | active (Part A done) | — |
+| 5 | Runtime kits + agent kits + agent integration | active (Parts A+B done) | — |
 | 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | pending | — |
 | 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | pending | — |
 | 8 | macOS support, Docker fallback, completion, ship | pending | — |
@@ -80,7 +80,47 @@ Implementation stats:
 - Commits: design (`0da7a15`), Part A impl (`870f6a0`), zshenv fix
   (`18473b1`).
 
-Parts B and C of Phase 5 remain (polyglot + agent kits).
+Part C of Phase 5 remains (agent kits: claude, codex, opencode + config defaults).
+
+---
+
+## Phase 5 Part B Notes
+
+What's now possible that wasn't before:
+- `agentbox build polyglot` — the headline kit. One image instead of seven.
+  Installs Node + Python + Go + Rust + Ruby (rbenv) + Java/Kotlin (sdkman)
+  + C/C++ toolchain + DB clients.
+- `agentbox build polyglot,node` composes cleanly (node is NOT in conflicts_with).
+- `agentbox build polyglot,python|go|rust|systems` all error at resolve time
+  (conflicts fire on the full walked set, as designed).
+
+Resolver behavior clarified:
+- Conflicts fire on the **full resolved set** (after depends_on expansion), not
+  just the user-requested set. This means `polyglot,claude` works only because
+  "node" is omitted from polyglot's conflicts_with. If "node" were listed, the
+  resolver would see [base, node, polyglot, claude] and error on node+polyglot.
+  The design anticipated this (see design/phase-5.md cross-cutting decisions).
+
+New pinned versions (verified 2026-05-05):
+- rbenv: 1.3.2 (rbenv/rbenv tag v1.3.2 — GitHub releases API confirmed)
+- sdkman: no version pin — get.sdkman.io installer URL is the stable distribution
+  point; intentionally unpinned per design.
+
+Smoke test results (image: agentbox/1c19bac4056b):
+- node v25.9.0, pnpm 10.33.3, bun 1.3.13, deno 2.7.14
+- python3 3.11.2, uv 0.11.9, ruff 0.15.12, pyenv 2.6.28
+- go 1.26.2, golangci-lint 2.12.1, delve (Delve Debugger), gopls via go install
+- rustc 1.95.0, cargo 1.95.0, cargo-watch 8.5.3, sccache 0.15.0
+- rbenv 1.3.2, sdkman init script at /opt/sdkman/bin/sdkman-init.sh
+- psql 15.16, mysql 10.11.14-MariaDB, sqlite3 3.40.1, redis-cli 7.0.15
+- clang 14.0.6, cmake 3.25.1, ninja 1.11.1
+
+Image size: 5.16 GB (expected; design said ~3-4GB but Ruby+sdkman+DB clients add up).
+
+Implementation stats:
+- 1 Sonnet agent. 4 files, 389 LOC total (install.sh is 296 lines).
+- Inlined from 4 Part A kits + 2 new sections (Ruby, sdkman).
+- Commit: `4175516`.
 
 ---
 
