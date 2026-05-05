@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# box — dispatcher for the in-box helper commands.
+# Subcommands live as /usr/local/bin/box-<name>.
+
+set -u
+
+case "${1:-help}" in
+  info)    shift; exec box-info "$@" ;;
+  scratch) shift; exec box-scratch "$@" ;;
+  save)    shift; exec box-save "$@" ;;
+  net)     echo "box net: not yet available (lands in agentbox Phase 6)" >&2; exit 1 ;;
+  help|-h|--help) exec box-help ;;
+  *)
+    echo "box: unknown subcommand: $1" >&2
+    box-help
+    exit 1
+    ;;
+esac

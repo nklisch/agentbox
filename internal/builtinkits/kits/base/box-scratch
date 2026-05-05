@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# box scratch — print the path to a tmpfs scratch dir (ephemeral; survives the
+# session but not a container restart).
+# Usage: cd "$(box scratch)"   or   source <(box scratch && cd /tmp/box-scratch)
+
+set -u
+mkdir -p /tmp/box-scratch
+echo /tmp/box-scratch

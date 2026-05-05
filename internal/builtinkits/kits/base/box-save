@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# box save <file> — copy a file from the box to the host-visible saved dir.
+# In Phase 4, agentbox will mount sessions/<id>/saved/ explicitly.
+# Until then, files land in AGENTBOX_SAVED_DIR (default: /root/.local/share/agentbox-saved/).
+
+set -eu
+
+if [ $# -lt 1 ]; then
+  echo "usage: box save <file>" >&2
+  exit 2
+fi
+
+src="$1"
+if [ ! -f "$src" ]; then
+  echo "box save: $src: not a regular file" >&2
+  exit 1
+fi
+
+dst_root="${AGENTBOX_SAVED_DIR:-/root/.local/share/agentbox-saved}"
+mkdir -p "$dst_root"
+dst="$dst_root/$(basename "$src")"
+cp -p "$src" "$dst"
+echo "saved → $dst"

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# box info — print this box's project, agent, kits, mounts, network, resources.
+# Sources: AGENTBOX_* env vars (set by agentbox at create time, lands in Phase 3),
+# /etc/agentbox/config.toml (mounted by agentbox at create time, lands in Phase 4).
+# When run outside an agentbox container (e.g., `podman run --rm <tag> box info`),
+# unset values print as "n/a" and the command still exits 0.
+
+set -u
+
+cfg=/etc/agentbox/config.toml
+
+printf "project_id   %s\n" "${AGENTBOX_PROJECT_ID:-n/a}"
+printf "project      %s\n" "${AGENTBOX_PROJECT:-n/a}"
+printf "agent        %s\n" "${AGENTBOX_AGENT:-n/a}"
+printf "kits         %s\n" "${AGENTBOX_KITS:-n/a}"
+printf "kit_image    %s\n" "${AGENTBOX_KIT_IMAGE:-n/a}"
+printf "network      %s\n" "${AGENTBOX_NETWORK:-n/a}"
+printf "created      %s\n" "${AGENTBOX_CREATED:-n/a}"
+printf "\n"
+
+if [ -f "$cfg" ]; then
+  printf "config       %s (mounted by agentbox)\n" "$cfg"
+else
+  printf "config       (not mounted; run via 'agentbox run' to mount)\n"
+fi
+
+# Resource limits — read from cgroups when present (v2 first, then v1 fallback).
+if [ -f /sys/fs/cgroup/memory.max ]; then
+  printf "memory.max   %s\n" "$(cat /sys/fs/cgroup/memory.max)"
+elif [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+  printf "memory.max   %s\n" "$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)"
+fi
+if [ -f /sys/fs/cgroup/cpu.max ]; then
+  printf "cpu.max      %s\n" "$(cat /sys/fs/cgroup/cpu.max)"
+fi

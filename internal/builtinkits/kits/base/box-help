@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+cat <<'EOF'
+box — agentbox in-box helpers
+
+  box info       Show project, agent, kits, mounts, network, resources
+  box scratch    Print path to a tmpfs scratch dir (ephemeral)
+  box save <f>   Copy a file to the host state dir so it survives `agentbox rm`
+  box net        (Phase 6) Show network policy + recent DNS queries
+  box help       This message
+EOF

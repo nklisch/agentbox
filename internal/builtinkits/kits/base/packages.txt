@@ -1,0 +1,11 @@
+zsh
+git
+unzip
+xz-utils
+ca-certificates
+gnupg
+fzf
+bat
+fd-find
+ripgrep
+jq

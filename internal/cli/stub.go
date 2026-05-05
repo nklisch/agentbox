@@ -42,6 +42,3 @@ func newLsCmd() *cobra.Command {
 func newRmCmd() *cobra.Command {
 	return stubCmd("rm <project_id>", "Stop and remove boxes + their session state")
 }
-func newBuildCmd() *cobra.Command {
-	return stubCmd("build [kit_list]", "Build (or rebuild) a composed kit image")
-}
