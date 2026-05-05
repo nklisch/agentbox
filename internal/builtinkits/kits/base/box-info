@@ -1,35 +1,72 @@
 #!/usr/bin/env bash
 # box info — print this box's project, agent, kits, mounts, network, resources.
-# Sources: AGENTBOX_* env vars (set by agentbox at create time, lands in Phase 3),
-# /etc/agentbox/config.toml (mounted by agentbox at create time, lands in Phase 4).
-# When run outside an agentbox container (e.g., `podman run --rm <tag> box info`),
+# Sources: AGENTBOX_* env vars (set by agentbox at create time).
+# When run outside an agentbox container (e.g. `podman run --rm <tag> box info`),
 # unset values print as "n/a" and the command still exits 0.
 
 set -u
 
-cfg=/etc/agentbox/config.toml
-
+# ── Top section: simple env-var lookups with n/a fallback ─────────────────────
 printf "project_id   %s\n" "${AGENTBOX_PROJECT_ID:-n/a}"
 printf "project      %s\n" "${AGENTBOX_PROJECT:-n/a}"
+printf "cwd          %s\n" "$(pwd 2>/dev/null || echo n/a)"
 printf "agent        %s\n" "${AGENTBOX_AGENT:-n/a}"
 printf "kits         %s\n" "${AGENTBOX_KITS:-n/a}"
 printf "kit_image    %s\n" "${AGENTBOX_KIT_IMAGE:-n/a}"
 printf "network      %s\n" "${AGENTBOX_NETWORK:-n/a}"
-printf "created      %s\n" "${AGENTBOX_CREATED:-n/a}"
-printf "\n"
 
-if [ -f "$cfg" ]; then
-  printf "config       %s (mounted by agentbox)\n" "$cfg"
-else
-  printf "config       (not mounted; run via 'agentbox run' to mount)\n"
-fi
+# ── Mounts: enumerate known agentbox bind mounts ──────────────────────────────
+# Each entry: "path" "label" (label empty string means no parenthetical).
+mount_path() {
+    local path="$1"
+    local label="$2"
+    [ -z "$path" ] && return
+    if [ -e "$path" ]; then
+        # findmnt -no OPTIONS returns comma-separated mount options;
+        # extract the first rw or ro token.
+        local opts
+        opts=$(findmnt -no OPTIONS "$path" 2>/dev/null \
+               | tr ',' '\n' \
+               | grep -E '^rw$|^ro$' \
+               | head -1)
+        [ -z "$opts" ] && opts="?"
+        if [ -n "$label" ]; then
+            printf "  %-35s %s  (%s)\n" "$path" "$opts" "$label"
+        else
+            printf "  %-35s %s\n" "$path" "$opts"
+        fi
+    fi
+}
 
-# Resource limits — read from cgroups when present (v2 first, then v1 fallback).
-if [ -f /sys/fs/cgroup/memory.max ]; then
-  printf "memory.max   %s\n" "$(cat /sys/fs/cgroup/memory.max)"
-elif [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
-  printf "memory.max   %s\n" "$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)"
-fi
+printf "mounts\n"
+mount_path "$(pwd 2>/dev/null)" "project"
+mount_path "/root/.gitconfig" ""
+mount_path "/root/.ssh" ""
+mount_path "/root/.claude" ""
+mount_path "/root/.local/share/agentbox-history" ""
+mount_path "/root/.local/share/agentbox-saved" ""
+
+# ── Resources: cgroups v2 ──────────────────────────────────────────────────────
+printf "resources\n"
+
 if [ -f /sys/fs/cgroup/cpu.max ]; then
-  printf "cpu.max      %s\n" "$(cat /sys/fs/cgroup/cpu.max)"
+    cpu=$(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo n/a)
+    printf "  cpus     %s\n" "$cpu"
 fi
+
+if [ -f /sys/fs/cgroup/memory.max ]; then
+    mem=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a)
+    if [ "$mem" != "max" ] && [ "$mem" != "n/a" ] && [ -n "$mem" ]; then
+        human=$(numfmt --to=iec-i --suffix=B --format='%.1f' "$mem" 2>/dev/null || echo "$mem")
+        printf "  memory   %s\n" "$human"
+    else
+        printf "  memory   %s\n" "${mem:-n/a}"
+    fi
+fi
+
+if [ -f /sys/fs/cgroup/pids.max ]; then
+    pids=$(cat /sys/fs/cgroup/pids.max 2>/dev/null || echo n/a)
+    printf "  pids     %s\n" "${pids:-n/a}"
+fi
+
+printf "created      %s\n" "${AGENTBOX_CREATED:-n/a}"

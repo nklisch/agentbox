@@ -27,11 +27,14 @@ func newShellCmd() *cobra.Command {
 			}
 			l.Stdout = cmd.OutOrStdout()
 			l.Stderr = cmd.ErrOrStderr()
-			_ = noZellij // P3 has no zellij; flag accepted for future-compat.
-			return l.Shell(lifecycle.RunOpts{Fresh: fresh, Attach: true})
+			return l.Shell(lifecycle.RunOpts{
+				Fresh:    fresh,
+				Attach:   true,
+				NoZellij: noZellij,
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&fresh, "fresh", false, "remove any existing box first")
-	cmd.Flags().BoolVar(&noZellij, "no-zellij", false, "skip zellij entirely (no-op in P3)")
+	cmd.Flags().BoolVar(&noZellij, "no-zellij", false, "skip zellij and use bare shell exec (for scripting)")
 	return cmd
 }

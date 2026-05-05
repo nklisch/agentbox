@@ -58,6 +58,10 @@ func EnsureSession(projectID string) (string, error) {
 	if err := EnsureDir(dir); err != nil {
 		return "", err
 	}
+	// Create the saved/ subdir so the bind mount source exists before podman starts.
+	if err := EnsureDir(filepath.Join(dir, "saved")); err != nil {
+		return "", err
+	}
 	// Touch files that are bind-mounted by runspec; podman fails to mount a
 	// non-existent source even for ro mounts.
 	for _, name := range []string{"history", "layout.kdl", "effective-config.toml"} {

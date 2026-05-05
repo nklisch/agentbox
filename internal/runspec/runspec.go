@@ -149,12 +149,13 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 			Mode:   "rw",
 		})
 	}
-	// Session state dir mounts (shell history, layout, effective config).
+	// Session state dir mounts (shell history, layout, effective config, saved/).
 	if in.StateDir != "" {
 		args.Mounts = append(args.Mounts,
 			Mount{Source: in.StateDir + "/history", Target: "/root/.local/share/agentbox-history", Mode: "rw"},
 			Mount{Source: in.StateDir + "/layout.kdl", Target: "/etc/agentbox/layout.kdl", Mode: "ro"},
 			Mount{Source: in.StateDir + "/effective-config.toml", Target: "/etc/agentbox/config.toml", Mode: "ro"},
+			Mount{Source: in.StateDir + "/saved", Target: "/root/.local/share/agentbox-saved", Mode: "rw"},
 		)
 	}
 	// Extra mounts ("<src>:<dst>:<mode>"). Validation deferred to a later phase.

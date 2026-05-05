@@ -435,30 +435,106 @@ func TestRun_NoAttach(t *testing.T) {
 	}
 }
 
-func TestRun_AttachCallsExec(t *testing.T) {
+func TestRun_AttachNonTTY_PrintsLiveness(t *testing.T) {
 	rt := newFakeRuntime()
 	cfg := defaultTestCfg()
 	setupProject(t)
 
-	execCalled := false
+	var stdout bytes.Buffer
+	l := newTestLifecycle(t, rt, cfg, nil)
+	l.Stdout = &stdout
+
+	// Default stdinIsTerminal returns false in tests (no real TTY).
+	err := l.Run(lifecycle.RunOpts{Attach: true})
+	if err != nil {
+		t.Fatalf("Run(attach, non-TTY): %v", err)
+	}
+	if containsCall(rt.calls, "Exec") {
+		t.Error("Exec should not be called when stdin is not a TTY")
+	}
+	if !strings.Contains(stdout.String(), "(running)") {
+		t.Errorf("expected liveness print, got: %q", stdout.String())
+	}
+}
+
+func TestRun_AttachTTY_InvokesZellij(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	setupProject(t)
+
 	var execArgv []string
 	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
-		execCalled = true
 		execArgv = opts.Argv
 		return 0, nil
 	}
 
-	l := newTestLifecycle(t, rt, cfg, nil)
+	restoreTTY := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restoreTTY()
 
+	l := newTestLifecycle(t, rt, cfg, nil)
 	err := l.Run(lifecycle.RunOpts{Attach: true})
 	if err != nil {
-		t.Fatalf("Run(attach): %v", err)
+		t.Fatalf("Run(attach, TTY): %v", err)
 	}
-	if !execCalled {
-		t.Fatal("expected Exec to be called when Attach=true")
+	if !containsCall(rt.calls, "Exec") {
+		t.Fatal("expected Exec to be called when Attach=true and stdin is TTY")
 	}
-	if len(execArgv) == 0 || execArgv[0] != cfg.Shell.Shell {
-		t.Errorf("expected Exec argv[0]=%q, got %v", cfg.Shell.Shell, execArgv)
+	if len(execArgv) == 0 || execArgv[0] != "zellij" {
+		t.Errorf("expected zellij exec, got argv=%v", execArgv)
+	}
+}
+
+func TestShell_NoZellij_CallsShellExec(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	setupProject(t)
+
+	var execArgv []string
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		execArgv = opts.Argv
+		return 0, nil
+	}
+
+	restoreTTY := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restoreTTY()
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+	err := l.Shell(lifecycle.RunOpts{Attach: true, NoZellij: true})
+	if err != nil {
+		t.Fatalf("Shell(NoZellij): %v", err)
+	}
+	if !containsCall(rt.calls, "Exec") {
+		t.Fatal("expected Exec to be called for --no-zellij")
+	}
+	if len(execArgv) == 0 || execArgv[0] == "zellij" {
+		t.Errorf("--no-zellij should exec shell, not zellij; got argv=%v", execArgv)
+	}
+}
+
+func TestShell_DefaultPath_InvokesZellij(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	setupProject(t)
+
+	var execArgv []string
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		execArgv = opts.Argv
+		return 0, nil
+	}
+
+	restoreTTY := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restoreTTY()
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+	err := l.Shell(lifecycle.RunOpts{Attach: true, NoZellij: false})
+	if err != nil {
+		t.Fatalf("Shell(zellij): %v", err)
+	}
+	if !containsCall(rt.calls, "Exec") {
+		t.Fatal("expected Exec to be called for default shell path")
+	}
+	if len(execArgv) == 0 || execArgv[0] != "zellij" {
+		t.Errorf("expected zellij exec for default shell; got argv=%v", execArgv)
 	}
 }
 

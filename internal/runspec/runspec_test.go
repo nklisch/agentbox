@@ -376,6 +376,30 @@ func TestToShell_ContainsEnvVars(t *testing.T) {
 	}
 }
 
+func TestBuildPodmanCreateArgs_SavedMount(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+
+	var found bool
+	for _, m := range args.Mounts {
+		if m.Source == in.StateDir+"/saved" &&
+			m.Target == "/root/.local/share/agentbox-saved" &&
+			m.Mode == "rw" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected saved/ mount {%s/saved:/root/.local/share/agentbox-saved:rw}, not found in %+v",
+			in.StateDir, args.Mounts)
+	}
+}
+
 func TestBuildPodmanCreateArgs_ExtraMount_Invalid(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Mounts.Extra = []string{"not-valid-format"}

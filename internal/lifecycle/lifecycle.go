@@ -20,6 +20,7 @@ import (
 	"github.com/nklisch/agentbox/internal/project"
 	"github.com/nklisch/agentbox/internal/runspec"
 	"github.com/nklisch/agentbox/internal/state"
+	"github.com/nklisch/agentbox/internal/zellij"
 )
 
 // Lifecycle orchestrates container lifecycle: create/start/exec/ls/rm.
@@ -174,18 +175,55 @@ func writeEffectiveConfig(projID string, cfg config.Config) error {
 	return state.WriteEffectiveConfig(projID, buf.Bytes())
 }
 
-// RunOpts controls the Run command.
-type RunOpts struct {
-	Agent   string
-	Kits    []string
-	Fresh   bool
-	Attach  bool
-	Network string // override Cfg.Network.Mode for this run
+// writeLayout serialises a zellij layout and writes it to
+// <state-dir>/sessions/<id>/layout.kdl (bind-mounted ro into the box at
+// /etc/agentbox/layout.kdl). Called before zellijAttach so the file is never
+// empty when zellij starts.
+func writeLayout(projID, projAbs string, mode zellij.Mode, agentCmd []string, shellName string) error {
+	dir, err := state.SessionDir(projID)
+	if err != nil {
+		return err
+	}
+	if err := state.EnsureDir(dir); err != nil {
+		return err
+	}
+	body := zellij.GenerateKDL(zellij.Layout{
+		Mode:       mode,
+		AgentCmd:   agentCmd,
+		ProjectAbs: projAbs,
+		Shell:      shellName,
+	})
+	return os.WriteFile(filepath.Join(dir, "layout.kdl"), []byte(body), 0o600)
 }
 
-// Run is the high-level run command. If Attach is true (default), execs
-// into the box with an interactive zsh after creating/starting. If false,
-// just ensures and exits.
+// stdinIsTerminal is a package-level variable so tests can swap it.
+var stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
+
+// SetStdinIsTerminal replaces the TTY-detection function used by Run/Shell/Attach.
+// Returns a restore function the caller should defer. Intended for tests.
+func SetStdinIsTerminal(fn func() bool) func() {
+	orig := stdinIsTerminal
+	stdinIsTerminal = fn
+	return func() { stdinIsTerminal = orig }
+}
+
+// RunOpts controls the Run command.
+type RunOpts struct {
+	Agent    string
+	Kits     []string
+	Fresh    bool
+	Attach   bool
+	Network  string // override Cfg.Network.Mode for this run
+	NoZellij bool   // skip zellij and use bare-shell exec (only meaningful for Shell)
+}
+
+// Run is the high-level run command. Always writes the ModeRun layout so
+// that `agentbox attach .` can reconnect to the session later. If Attach is
+// true (default), also opens a zellij session when stdin is a TTY. If false
+// (--no-attach), just ensures the box is running and exits.
+//
+// Run is always zellij-launched in Phase 4. Users who want bare zsh should
+// use `agentbox shell --no-zellij`.
 func (l *Lifecycle) Run(opts RunOpts) error {
 	if opts.Network != "" {
 		l.Cfg.Network.Mode = opts.Network
@@ -196,17 +234,58 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 	if err != nil {
 		return err
 	}
+
+	// Resolve agent config to get the command for the layout.
+	agent := l.Cfg.DefaultAgent
+	if opts.Agent != "" {
+		agent = opts.Agent
+	}
+	a, ok := l.Cfg.Agents[agent]
+	if !ok {
+		return exitcode.New(exitcode.InvalidArgs, "agent %q not defined", agent)
+	}
+
+	// Write the layout unconditionally so `agentbox attach .` can reconnect
+	// even when --no-attach was used to start the box.
+	if err := writeLayout(box.ProjectID, box.CWD, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell); err != nil {
+		return exitcode.Wrap(exitcode.Generic, err)
+	}
+
 	if !opts.Attach {
 		fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
 		return nil
 	}
-	return l.shellInto(box)
+	if !stdinIsTerminal() {
+		// Zellij needs a real TTY; fall back to liveness print.
+		fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
+		return nil
+	}
+	return l.zellijAttach(box)
 }
 
-// Shell is currently identical to Run with an interactive shell. P4 will
-// diverge them: Run launches the agent via zellij; Shell stays as bare zsh.
+// Shell opens an interactive session in the box. With a TTY and no --no-zellij
+// flag, it launches a single-pane zellij session. With --no-zellij or without
+// a TTY, it execs bare zsh (scripting-friendly path from Phase 3).
 func (l *Lifecycle) Shell(opts RunOpts) error {
-	return l.Run(opts)
+	if opts.Network != "" {
+		l.Cfg.Network.Mode = opts.Network
+	}
+	box, err := l.EnsureBox(EnsureOpts{Fresh: opts.Fresh})
+	if err != nil {
+		return err
+	}
+	if !stdinIsTerminal() {
+		// Both zellij and bare shell need a TTY for interactivity.
+		fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
+		return nil
+	}
+	if opts.NoZellij {
+		return l.shellInto(box)
+	}
+	if err := writeLayout(box.ProjectID, box.CWD, zellij.ModeShell, nil, l.Cfg.Shell.Shell); err != nil {
+		return exitcode.Wrap(exitcode.Generic, err)
+	}
+	return l.zellijAttach(box)
 }
 
 // shellInto execs zsh in the running box, inheriting stdio.
@@ -217,11 +296,37 @@ func (l *Lifecycle) Shell(opts RunOpts) error {
 // only `-i` so the inner shell reads from the redirected stream and exits on
 // EOF instead of blocking on the pty.
 func (l *Lifecycle) shellInto(box container.Box) error {
-	tty := isTerminal(os.Stdin)
+	tty := stdinIsTerminal()
 	code, err := l.Runtime.Exec(container.ContainerName(box.ProjectID), container.ExecOpts{
 		Argv:        []string{l.Cfg.Shell.Shell},
 		Interactive: true,
 		TTY:         tty,
+		Stdin:       os.Stdin,
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
+	})
+	if err != nil {
+		return exitcode.Wrap(exitcode.Generic, err)
+	}
+	if code != 0 {
+		return &exitcode.Err{Code: code}
+	}
+	return nil
+}
+
+// zellijAttach execs `zellij --layout /etc/agentbox/layout.kdl attach -c agentbox`
+// inside the box. The session name is the literal string "agentbox" — zellij
+// creates it if missing, joins it if present (-c = create if not exists).
+// Only called from TTY-gated paths; always passes TTY: true.
+func (l *Lifecycle) zellijAttach(box container.Box) error {
+	code, err := l.Runtime.Exec(container.ContainerName(box.ProjectID), container.ExecOpts{
+		Argv: []string{
+			"zellij",
+			"--layout", "/etc/agentbox/layout.kdl",
+			"attach", "-c", "agentbox",
+		},
+		Interactive: true,
+		TTY:         true,
 		Stdin:       os.Stdin,
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
@@ -289,11 +394,10 @@ func (l *Lifecycle) Exec(opts ExecOpts) error {
 	return nil
 }
 
-// Attach connects to a running box. With a TTY on stdin it drops into an
-// interactive shell (Phase 4 will swap zellij in). Without a TTY (scripted
-// invocations, test checkpoints) it verifies liveness and exits — running
-// an interactive zsh against /dev/null would block on the inner pty even
-// with `-i` only, so the non-TTY path is a deliberate sanity-check shape.
+// Attach connects to a running box. With a TTY on stdin it joins the existing
+// zellij session (or creates one if the layout file is missing/empty). Without
+// a TTY (scripted invocations, test checkpoints) it verifies liveness and
+// exits — zellij needs a real TTY.
 func (l *Lifecycle) Attach(input string) error {
 	projID, err := l.ResolveID(input)
 	if err != nil {
@@ -308,11 +412,26 @@ func (l *Lifecycle) Attach(input string) error {
 		return exitcode.New(exitcode.NotFound,
 			"box %s is not running (status: %s)", projID, box.Status)
 	}
-	if !isTerminal(os.Stdin) {
+	if !stdinIsTerminal() {
+		// Liveness check — exit clean without blocking.
 		fmt.Fprintf(l.Stdout, "%s (running)\n", box.ProjectID)
 		return nil
 	}
-	return l.shellInto(box)
+	// Regenerate the layout only when the file is empty or missing (e.g. if the
+	// box was started via --no-attach before P4 wrote it).
+	if sessionDir, serr := state.SessionDir(projID); serr == nil {
+		layoutPath := filepath.Join(sessionDir, "layout.kdl")
+		if info, ferr := os.Stat(layoutPath); ferr != nil || info.Size() == 0 {
+			agent := box.Agent
+			a, ok := l.Cfg.Agents[agent]
+			var cmd []string
+			if ok {
+				cmd = a.Cmd
+			}
+			_ = writeLayout(projID, box.CWD, zellij.ModeRun, cmd, l.Cfg.Shell.Shell)
+		}
+	}
+	return l.zellijAttach(box)
 }
 
 // LsFilter is the rich filter for `agentbox ls`.

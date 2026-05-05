@@ -481,6 +481,186 @@ func TestRunDryRun_ContainsEnvVars(t *testing.T) {
 	}
 }
 
+// ── Phase 4: zellij routing tests ────────────────────────────────────────────
+
+// fakeTerminal overrides the lifecycle.StdinIsTerminal seam so tests can
+// simulate an interactive terminal without requiring a real TTY.
+func withFakeTerminal(t *testing.T, isTTY bool) func() {
+	t.Helper()
+	return lifecycle.SetStdinIsTerminal(func() bool { return isTTY })
+}
+
+func TestShell_NoZellij_FallsBackToShellExec(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	id := projectID(tmp)
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-"+id] = container.Box{
+		ProjectID: id,
+		CWD:       tmp,
+		Status:    container.StatusRunning,
+	}
+
+	var gotArgv []string
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		gotArgv = opts.Argv
+		return 0, nil
+	}
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	// Simulate interactive TTY so --no-zellij actually execs (rather than
+	// falling back to liveness print).
+	restoreTTY := withFakeTerminal(t, true)
+	defer restoreTTY()
+
+	_, _, err := runCmd(t, "shell", "--no-zellij")
+	if err != nil {
+		t.Fatalf("shell --no-zellij: %v", err)
+	}
+	// Should exec the configured shell directly, not zellij.
+	if len(gotArgv) == 0 {
+		t.Fatal("expected an exec call, got none")
+	}
+	if gotArgv[0] == "zellij" {
+		t.Errorf("--no-zellij should not exec zellij; got argv=%v", gotArgv)
+	}
+}
+
+func TestShell_DefaultPath_InvokesZellij(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	id := projectID(tmp)
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-"+id] = container.Box{
+		ProjectID: id,
+		CWD:       tmp,
+		Status:    container.StatusRunning,
+	}
+
+	var gotArgv []string
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		gotArgv = opts.Argv
+		return 0, nil
+	}
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	// Simulate interactive TTY so zellij path is taken.
+	restoreTTY := withFakeTerminal(t, true)
+	defer restoreTTY()
+
+	_, _, err := runCmd(t, "shell")
+	if err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	if len(gotArgv) == 0 {
+		t.Fatal("expected an exec call, got none")
+	}
+	if gotArgv[0] != "zellij" {
+		t.Errorf("expected zellij as first arg; got argv=%v", gotArgv)
+	}
+	// Should contain --layout and attach -c agentbox.
+	shellStr := strings.Join(gotArgv, " ")
+	if !strings.Contains(shellStr, "--layout") {
+		t.Errorf("expected --layout in argv: %v", gotArgv)
+	}
+	if !strings.Contains(shellStr, "attach") || !strings.Contains(shellStr, "agentbox") {
+		t.Errorf("expected 'attach ... agentbox' in argv: %v", gotArgv)
+	}
+}
+
+func TestRun_AttachInteractive_InvokesZellij(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	id := projectID(tmp)
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-"+id] = container.Box{
+		ProjectID: id,
+		CWD:       tmp,
+		Agent:     "claude",
+		Status:    container.StatusRunning,
+	}
+
+	var gotArgv []string
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		gotArgv = opts.Argv
+		return 0, nil
+	}
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	// Simulate interactive TTY.
+	restoreTTY := withFakeTerminal(t, true)
+	defer restoreTTY()
+
+	_, _, err := runCmd(t, "run")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(gotArgv) == 0 {
+		t.Fatal("expected an exec call, got none")
+	}
+	if gotArgv[0] != "zellij" {
+		t.Errorf("expected zellij as first arg for interactive run; got argv=%v", gotArgv)
+	}
+}
+
+func TestRun_AttachNonTTY_PrintsLiveness(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	id := projectID(tmp)
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-"+id] = container.Box{
+		ProjectID: id,
+		CWD:       tmp,
+		Agent:     "claude",
+		Status:    container.StatusRunning,
+	}
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	// Non-TTY stdin (default in tests).
+	restoreTTY := withFakeTerminal(t, false)
+	defer restoreTTY()
+
+	out, _, err := runCmd(t, "run")
+	if err != nil {
+		t.Fatalf("run (non-TTY): %v", err)
+	}
+	if !strings.Contains(out, "(running)") {
+		t.Errorf("expected liveness print with '(running)', got: %q", out)
+	}
+}
+
 func TestCompletionZsh(t *testing.T) {
 	out, _, err := runCmd(t, "completion", "zsh")
 	if err != nil {

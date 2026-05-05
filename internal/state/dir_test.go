@@ -91,6 +91,40 @@ func TestIsWritable_Nonexistent(t *testing.T) {
 	}
 }
 
+func TestEnsureSession_CreatesSavedSubdir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	_, err := state.EnsureSession("abc123def456")
+	if err != nil {
+		t.Fatalf("EnsureSession() error: %v", err)
+	}
+
+	sessionDir, _ := state.SessionDir("abc123def456")
+	savedDir := filepath.Join(sessionDir, "saved")
+	info, err := os.Stat(savedDir)
+	if err != nil {
+		t.Fatalf("saved/ subdir should exist after EnsureSession: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("saved/ should be a directory")
+	}
+}
+
+func TestEnsureSession_Idempotent(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	_, err := state.EnsureSession("abc123def456")
+	if err != nil {
+		t.Fatalf("first EnsureSession() error: %v", err)
+	}
+	_, err = state.EnsureSession("abc123def456")
+	if err != nil {
+		t.Fatalf("second EnsureSession() (idempotent) error: %v", err)
+	}
+}
+
 func TestDir_ContainsAgentbox(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmp)
