@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nklisch/agentbox/internal/exitcode"
+	"github.com/nklisch/agentbox/internal/lifecycle"
 	"github.com/nklisch/agentbox/internal/project"
 	"github.com/nklisch/agentbox/internal/runspec"
 	"github.com/nklisch/agentbox/internal/state"
@@ -34,65 +35,31 @@ func newRunCmd() *cobra.Command {
 			}
 			cfg := res.Config
 
-			// Apply per-command overrides.
-			if networkFlag != "" {
-				cfg.Network.Mode = networkFlag
-				if err := cfg.Validate(); err != nil {
-					return exitcode.Wrap(exitcode.InvalidArgs, err)
-				}
-			}
-
-			agent := cfg.DefaultAgent
-			if len(args) == 1 {
-				agent = args[0]
-			}
-			a, ok := cfg.Agents[agent]
-			if !ok {
-				return exitcode.New(exitcode.InvalidArgs, "agent %q not defined in [agents.*]", agent)
-			}
-
-			kits := a.Kits
-			if kitsFlag != "" {
-				kits = strings.Split(kitsFlag, ",")
-			}
-
-			id, abs, err := project.Resolve()
-			if err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-
-			home, _ := os.UserHomeDir()
-			stateDir, err := state.SessionDir(id)
-			if err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-
-			in := runspec.BuildInput{
-				ProjectID:   id,
-				ProjectAbs:  abs,
-				ProjectName: filepath.Base(abs),
-				Agent:       agent,
-				Kits:        kits,
-				HomeDir:     home,
-				StateDir:    stateDir,
-				Created:     time.Now(),
-			}
-
 			if global.DryRun {
-				rs, err := runspec.BuildPodmanCreateArgs(cfg, in)
-				if err != nil {
-					return exitcode.Wrap(exitcode.Generic, err)
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "# project_id = %s\n", id)
-				fmt.Fprintf(cmd.OutOrStdout(), "# kits = %s\n", strings.Join(kits, ","))
-				fmt.Fprintf(cmd.OutOrStdout(), "# network = %s\n", cfg.Network.Mode)
-				fmt.Fprint(cmd.OutOrStdout(), rs.ToShell(cfg.Runtime))
-				_ = fresh
-				_ = noAttach
-				_ = detachOnExit
-				return nil
+				return runDryRun(cmd, res, args, kitsFlag, networkFlag)
 			}
-			return notImplementedRunE(cmd)
+
+			l, err := newLifecycle(cfg)
+			if err != nil {
+				return exitcode.Wrap(exitcode.Generic, err)
+			}
+			// Redirect lifecycle output through cobra's writer so tests can capture it.
+			l.Stdout = cmd.OutOrStdout()
+			l.Stderr = cmd.ErrOrStderr()
+
+			opts := lifecycle.RunOpts{
+				Fresh:   fresh,
+				Attach:  !noAttach,
+				Network: networkFlag,
+			}
+			if len(args) == 1 {
+				opts.Agent = args[0]
+			}
+			if kitsFlag != "" {
+				opts.Kits = strings.Split(kitsFlag, ",")
+			}
+			_ = detachOnExit // P3 doesn't auto-stop on exit; future phase.
+			return l.Run(opts)
 		},
 	}
 	cmd.Flags().BoolVar(&fresh, "fresh", false, "remove any existing box for this project before creating")
@@ -101,4 +68,62 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noAttach, "no-attach", false, "create/start the box but don't attach")
 	cmd.Flags().BoolVar(&detachOnExit, "detach-on-exit", false, "stop the container when the agent process exits")
 	return cmd
+}
+
+// runDryRun preserves Phase 1's dry-run behavior. Extracted so RunE stays clean.
+func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, networkFlag string) error {
+	// Apply per-command overrides.
+	c := cfg.Config
+	if networkFlag != "" {
+		c.Network.Mode = networkFlag
+		if err := c.Validate(); err != nil {
+			return exitcode.Wrap(exitcode.InvalidArgs, err)
+		}
+	}
+
+	agent := c.DefaultAgent
+	if len(args) == 1 {
+		agent = args[0]
+	}
+	a, ok := c.Agents[agent]
+	if !ok {
+		return exitcode.New(exitcode.InvalidArgs, "agent %q not defined in [agents.*]", agent)
+	}
+
+	kitList := a.Kits
+	if kitsFlag != "" {
+		kitList = strings.Split(kitsFlag, ",")
+	}
+
+	id, abs, err := project.Resolve()
+	if err != nil {
+		return exitcode.Wrap(exitcode.Generic, err)
+	}
+
+	home, _ := os.UserHomeDir()
+	stateDir, err := state.SessionDir(id)
+	if err != nil {
+		return exitcode.Wrap(exitcode.Generic, err)
+	}
+
+	in := runspec.BuildInput{
+		ProjectID:   id,
+		ProjectAbs:  abs,
+		ProjectName: filepath.Base(abs),
+		Agent:       agent,
+		Kits:        kitList,
+		HomeDir:     home,
+		StateDir:    stateDir,
+		Created:     time.Now(),
+	}
+
+	rs, err := runspec.BuildPodmanCreateArgs(c, in)
+	if err != nil {
+		return exitcode.Wrap(exitcode.Generic, err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "# project_id = %s\n", id)
+	fmt.Fprintf(cmd.OutOrStdout(), "# kits = %s\n", strings.Join(kitList, ","))
+	fmt.Fprintf(cmd.OutOrStdout(), "# network = %s\n", c.Network.Mode)
+	fmt.Fprint(cmd.OutOrStdout(), rs.ToShell(c.Runtime))
+	return nil
 }

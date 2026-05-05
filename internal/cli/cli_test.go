@@ -2,14 +2,21 @@ package cli_test
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nklisch/agentbox/internal/cli"
+	"github.com/nklisch/agentbox/internal/config"
+	"github.com/nklisch/agentbox/internal/container"
 	"github.com/nklisch/agentbox/internal/exitcode"
+	"github.com/nklisch/agentbox/internal/lifecycle"
+	"github.com/nklisch/agentbox/internal/runspec"
 )
 
 // runCmd executes the root command with the given args and returns captured
@@ -173,20 +180,304 @@ func TestRunUnknownAgent(t *testing.T) {
 	}
 }
 
-func TestStubReturnsUnimplemented(t *testing.T) {
-	_, _, err := runCmd(t, "shell")
+// ---- Phase 3 integration tests using fakeLifecycle seam ----
+
+// fakeRuntime is the same test double used here for CLI-level tests.
+type fakeRuntime struct {
+	boxes    map[string]container.Box
+	calls    []string
+	execStub func(name string, opts container.ExecOpts) (int, error)
+}
+
+func newFakeRuntime() *fakeRuntime {
+	return &fakeRuntime{boxes: make(map[string]container.Box)}
+}
+
+func (r *fakeRuntime) Create(args runspec.PodmanCreateArgs) error {
+	r.calls = append(r.calls, "Create")
+	id := strings.TrimPrefix(args.Name, "agentbox-")
+	r.boxes[args.Name] = container.Box{ProjectID: id, Status: container.StatusStopped}
+	return nil
+}
+func (r *fakeRuntime) Start(name string) error {
+	r.calls = append(r.calls, "Start")
+	if b, ok := r.boxes[name]; ok {
+		b.Status = container.StatusRunning
+		r.boxes[name] = b
+	}
+	return nil
+}
+func (r *fakeRuntime) Stop(name string) error { return nil }
+func (r *fakeRuntime) Inspect(name string) (container.Box, error) {
+	b, ok := r.boxes[name]
+	if !ok {
+		return container.Box{Status: container.StatusMissing}, nil
+	}
+	return b, nil
+}
+func (r *fakeRuntime) Exec(name string, opts container.ExecOpts) (int, error) {
+	r.calls = append(r.calls, "Exec")
+	if r.execStub != nil {
+		return r.execStub(name, opts)
+	}
+	return 0, nil
+}
+func (r *fakeRuntime) Ls(all bool) ([]container.Box, error) {
+	var out []container.Box
+	for _, b := range r.boxes {
+		if !all && b.Status != container.StatusRunning {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+func (r *fakeRuntime) Rm(name string, force bool) error {
+	delete(r.boxes, name)
+	return nil
+}
+
+// projectID computes the 12-char project ID for a path (matches project.IDFromPath).
+func projectID(path string) string {
+	h := sha1.Sum([]byte(path))
+	return hex.EncodeToString(h[:])[:12]
+}
+
+// setupFakeLifecycle installs a lifecycle factory that uses a fakeRuntime +
+// pre-populated boxes. Returns the fake runtime and a restore function.
+func setupFakeLifecycle(t *testing.T, rt *fakeRuntime) func() {
+	t.Helper()
+	restore := cli.SetLifecycleFactory(func(cfg config.Config) (*lifecycle.Lifecycle, error) {
+		return &lifecycle.Lifecycle{
+			Cfg:     cfg,
+			Runtime: rt,
+			// Builder is nil — tests don't exercise kit build paths.
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		}, nil
+	})
+	return restore
+}
+
+func TestRun_NoAttach_FakeRuntime(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	// Pre-populate the box as already running so EnsureBox returns immediately
+	// without needing a real Builder.
+	id := projectID(tmp)
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-"+id] = container.Box{
+		ProjectID: id,
+		CWD:       tmp,
+		Status:    container.StatusRunning,
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, _, err := runCmd(t, "run", "--no-attach")
+	if err != nil {
+		t.Fatalf("run --no-attach: %v", err)
+	}
+	if !strings.Contains(out, "(running)") {
+		t.Errorf("expected '(running)' in output, got: %q", out)
+	}
+}
+
+func TestLs_JSON_NDJSON(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-abc123456789"] = container.Box{
+		ProjectID: "abc123456789",
+		Project:   "testproj",
+		Agent:     "claude",
+		Kits:      []string{"base"},
+		Status:    container.StatusRunning,
+		Created:   time.Now(),
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, _, err := runCmd(t, "ls", "--json", "--all")
+	if err != nil {
+		t.Fatalf("ls --json: %v", err)
+	}
+	// NDJSON: one JSON object per line.
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 NDJSON line, got %d: %q", len(lines), out)
+	}
+	var v map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &v); err != nil {
+		t.Fatalf("NDJSON line is not valid JSON: %v\n%s", err, lines[0])
+	}
+	if v["project_id"] != "abc123456789" {
+		t.Errorf("project_id = %v, want abc123456789", v["project_id"])
+	}
+}
+
+func TestLs_HumanTable_HasHeader(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-abc123456789"] = container.Box{
+		ProjectID: "abc123456789",
+		Project:   "testproj",
+		Agent:     "claude",
+		Kits:      []string{"base"},
+		Status:    container.StatusRunning,
+		Created:   time.Now(),
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, _, err := runCmd(t, "ls", "--all")
+	if err != nil {
+		t.Fatalf("ls: %v", err)
+	}
+	if !strings.Contains(out, "PROJECT_ID") {
+		t.Errorf("ls table missing PROJECT_ID header:\n%s", out)
+	}
+	if !strings.Contains(out, "abc123456789") {
+		t.Errorf("ls table missing project_id abc123456789:\n%s", out)
+	}
+}
+
+func TestRm_NoArgsExits2(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	_, _, err := runCmd(t, "rm")
 	if err == nil {
-		t.Fatal("expected error for stub command, got nil")
+		t.Fatal("expected error for rm with no args")
 	}
 	var ee *exitcode.Err
 	if !errors.As(err, &ee) {
-		t.Fatalf("expected *exitcode.Err, got %T: %v", err, err)
+		t.Fatalf("expected *exitcode.Err, got %T", err)
 	}
-	if ee.Code != exitcode.Generic {
-		t.Errorf("expected exit code %d (Generic/1), got %d", exitcode.Generic, ee.Code)
+	if ee.Code != exitcode.InvalidArgs {
+		t.Errorf("expected InvalidArgs (%d), got %d", exitcode.InvalidArgs, ee.Code)
 	}
-	if !strings.Contains(ee.Error(), "not yet implemented") {
-		t.Errorf("error message %q should contain 'not yet implemented'", ee.Error())
+}
+
+func TestRm_AllRequiresForce(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-aaa000000000"] = container.Box{
+		ProjectID: "aaa000000000",
+		Status:    container.StatusRunning,
+	}
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	_, _, err := runCmd(t, "rm", "--all")
+	if err == nil {
+		t.Fatal("expected error for rm --all without --force")
+	}
+	var ee *exitcode.Err
+	if !errors.As(err, &ee) {
+		t.Fatalf("expected *exitcode.Err, got %T", err)
+	}
+	if ee.Code != exitcode.InvalidArgs {
+		t.Errorf("expected InvalidArgs (%d), got %d", exitcode.InvalidArgs, ee.Code)
+	}
+}
+
+func TestAttach_NotRunningExits4(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-abc123456789"] = container.Box{
+		ProjectID: "abc123456789",
+		Status:    container.StatusStopped,
+	}
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	_, _, err := runCmd(t, "attach", "abc123456789")
+	if err == nil {
+		t.Fatal("expected error for attach on stopped box")
+	}
+	var ee *exitcode.Err
+	if !errors.As(err, &ee) {
+		t.Fatalf("expected *exitcode.Err, got %T", err)
+	}
+	if ee.Code != exitcode.NotFound {
+		t.Errorf("expected NotFound (%d), got %d", exitcode.NotFound, ee.Code)
+	}
+}
+
+func TestExec_RoutesArgsToLifecycle(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-abc123456789"] = container.Box{
+		ProjectID: "abc123456789",
+		CWD:       tmp,
+		Status:    container.StatusRunning,
+	}
+
+	var gotArgv []string
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		gotArgv = opts.Argv
+		return 0, nil
+	}
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	_, _, err := runCmd(t, "exec", "abc123456789", "echo", "hello")
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if len(gotArgv) != 2 || gotArgv[0] != "echo" || gotArgv[1] != "hello" {
+		t.Errorf("expected exec argv [echo hello], got %v", gotArgv)
+	}
+}
+
+// TestRunDryRun_ContainsEnvVars verifies that the new AGENTBOX_* env vars
+// appear in dry-run output (backward-compatible extension of Phase 1 test).
+func TestRunDryRun_ContainsEnvVars(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	out, _, err := runCmd(t, "run", "--dry-run")
+	if err != nil {
+		t.Fatalf("run --dry-run: %v", err)
+	}
+	if !strings.Contains(out, "AGENTBOX_PROJECT_ID=") {
+		t.Errorf("dry-run output missing AGENTBOX_PROJECT_ID=:\n%s", out)
 	}
 }
 

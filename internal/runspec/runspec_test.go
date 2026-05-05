@@ -318,6 +318,64 @@ func TestToShell_CapDropAndSecOpt(t *testing.T) {
 	}
 }
 
+func TestBuildPodmanCreateArgs_EnvVars(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+
+	kvMap := make(map[string]string, len(args.EnvVars))
+	for _, kv := range args.EnvVars {
+		kvMap[kv.Key] = kv.Value
+	}
+
+	checks := map[string]string{
+		"AGENTBOX_PROJECT_ID": in.ProjectID,
+		"AGENTBOX_PROJECT":    in.ProjectName,
+		"AGENTBOX_AGENT":      in.Agent,
+		"AGENTBOX_KITS":       strings.Join(in.Kits, ","),
+		"AGENTBOX_NETWORK":    cfg.Network.Mode,
+	}
+	for key, want := range checks {
+		if got, ok := kvMap[key]; !ok {
+			t.Errorf("EnvVars missing key %q", key)
+		} else if got != want {
+			t.Errorf("EnvVars[%q] = %q, want %q", key, got, want)
+		}
+	}
+	// AGENTBOX_SAVED_DIR should end in /saved
+	if v := kvMap["AGENTBOX_SAVED_DIR"]; !strings.HasSuffix(v, "/saved") {
+		t.Errorf("AGENTBOX_SAVED_DIR %q does not end in '/saved'", v)
+	}
+	// AGENTBOX_CREATED should be RFC3339
+	if v := kvMap["AGENTBOX_CREATED"]; v == "" {
+		t.Errorf("AGENTBOX_CREATED is empty")
+	}
+	if len(args.EnvVars) != 8 {
+		t.Errorf("expected 8 EnvVars, got %d", len(args.EnvVars))
+	}
+}
+
+func TestToShell_ContainsEnvVars(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	shell := args.ToShell("podman")
+	if !strings.Contains(shell, "AGENTBOX_PROJECT_ID=") {
+		t.Errorf("ToShell missing AGENTBOX_PROJECT_ID= line:\n%s", shell)
+	}
+	if !strings.Contains(shell, in.ProjectID) {
+		t.Errorf("ToShell missing project ID %q:\n%s", in.ProjectID, shell)
+	}
+}
+
 func TestBuildPodmanCreateArgs_ExtraMount_Invalid(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Mounts.Extra = []string{"not-valid-format"}

@@ -1,6 +1,8 @@
 package state
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -43,4 +45,51 @@ func IsWritable(path string) bool {
 	_ = f.Close()
 	_ = os.Remove(name)
 	return true
+}
+
+// EnsureSession creates the session dir for projectID with mode 0700 and
+// touches the files that are bind-mounted into the box (so podman can mount them
+// as rw/ro even before they have real content).
+func EnsureSession(projectID string) (string, error) {
+	dir, err := SessionDir(projectID)
+	if err != nil {
+		return "", err
+	}
+	if err := EnsureDir(dir); err != nil {
+		return "", err
+	}
+	// Touch files that are bind-mounted by runspec; podman fails to mount a
+	// non-existent source even for ro mounts.
+	for _, name := range []string{"history", "layout.kdl", "effective-config.toml"} {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+			if err := os.WriteFile(p, nil, 0o600); err != nil {
+				return "", err
+			}
+		}
+	}
+	return dir, nil
+}
+
+// RemoveSession deletes the session dir for projectID. Idempotent: missing
+// dir is not an error.
+func RemoveSession(projectID string) error {
+	dir, err := SessionDir(projectID)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
+// WriteEffectiveConfig writes the merged config to <state-dir>/sessions/<id>/effective-config.toml.
+// The file is mounted ro into the box at /etc/agentbox/config.toml.
+func WriteEffectiveConfig(projectID string, body []byte) error {
+	dir, err := SessionDir(projectID)
+	if err != nil {
+		return err
+	}
+	if err := EnsureDir(dir); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "effective-config.toml"), body, 0o600)
 }

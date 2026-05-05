@@ -28,6 +28,7 @@ type PodmanCreateArgs struct {
 	Mounts   []Mount
 	Workdir  string
 	EnvNames []string // -e NAME (no value, by name only — secrets policy)
+	EnvVars  []KV     // -e NAME=VALUE (non-secret context: AGENTBOX_*, etc.)
 	CPUs     int
 	Memory   string
 	PIDs     int
@@ -108,6 +109,17 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		{"agentbox.kits", strings.Join(in.Kits, ",")},
 		{"agentbox.kit_image", args.Image},
 		{"agentbox.created", in.Created.UTC().Format(time.RFC3339)},
+	}
+
+	args.EnvVars = []KV{
+		{Key: "AGENTBOX_PROJECT_ID", Value: in.ProjectID},
+		{Key: "AGENTBOX_PROJECT", Value: in.ProjectName},
+		{Key: "AGENTBOX_AGENT", Value: in.Agent},
+		{Key: "AGENTBOX_KITS", Value: strings.Join(in.Kits, ",")},
+		{Key: "AGENTBOX_KIT_IMAGE", Value: args.Image},
+		{Key: "AGENTBOX_NETWORK", Value: cfg.Network.Mode},
+		{Key: "AGENTBOX_CREATED", Value: in.Created.UTC().Format(time.RFC3339)},
+		{Key: "AGENTBOX_SAVED_DIR", Value: in.StateDir + "/saved"},
 	}
 
 	// Same-path project mount (non-negotiable per CLAUDE.md).
@@ -208,6 +220,9 @@ func (p PodmanCreateArgs) ToShell(runtime string) string {
 	}
 	for _, e := range p.EnvNames {
 		fmt.Fprintf(&b, "  -e %s \\\n", e)
+	}
+	for _, e := range p.EnvVars {
+		fmt.Fprintf(&b, "  -e %q \\\n", e.Key+"="+e.Value)
 	}
 	fmt.Fprintf(&b, "  %q", p.Image)
 	for _, a := range p.Argv {
