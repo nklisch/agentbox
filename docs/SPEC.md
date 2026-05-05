@@ -96,6 +96,13 @@ prompt   = "starship"              # starship | minimal
 history  = true                    # persist to state dir
 aliases  = { ll = "eza -la", g = "git" }
 
+[zellij]
+layout = "focus"   # focus | reviewer | auditor | <custom>
+                   # focus is the default; reviewer adds a live diff pane +
+                   # watchexec test runner; auditor adds a Claude hook trail pane.
+                   # Custom layouts live at ~/.config/agentbox/layouts/<name>.kdl.
+                   # See docs/LAYOUTS.md for the full reference.
+
 [agents.claude]
 kits = ["polyglot", "claude"]
 cmd  = ["claude", "--dangerously-skip-permissions"]

@@ -79,6 +79,7 @@ agentbox run [agent] [flags]
 | `--fresh`           | Remove any existing box for this project before creating.   |
 | `--kits <list>`     | Override the kit list (comma-separated). Implies `--fresh` if the resolved kit_image differs. |
 | `--network <mode>`  | Override `network.mode` for this run.                       |
+| `--layout <name>`   | Zellij layout to use: `focus` (default), `reviewer`, `auditor`, or a custom name. Overrides `[zellij].layout` config. Exit code 2 if the name is not a built-in and no file exists at `~/.config/agentbox/layouts/<name>.kdl`. See [docs/LAYOUTS.md](LAYOUTS.md). |
 | `--no-attach`       | Create/start the box but don't attach (for scripting).      |
 | `--detach-on-exit`  | Stop the container when the agent process exits (default: keep running). |
 

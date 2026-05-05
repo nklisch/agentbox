@@ -15,6 +15,7 @@ import (
 	"github.com/nklisch/agentbox/internal/runspec"
 	"github.com/nklisch/agentbox/internal/seccomp"
 	"github.com/nklisch/agentbox/internal/state"
+	"github.com/nklisch/agentbox/internal/zellij"
 )
 
 func newRunCmd() *cobra.Command {
@@ -22,6 +23,7 @@ func newRunCmd() *cobra.Command {
 		fresh        bool
 		kitsFlag     string
 		networkFlag  string
+		layoutFlag   string
 		noAttach     bool
 		detachOnExit bool
 	)
@@ -37,7 +39,7 @@ func newRunCmd() *cobra.Command {
 			cfg := res.Config
 
 			if global.DryRun {
-				return runDryRun(cmd, res, args, kitsFlag, networkFlag)
+				return runDryRun(cmd, res, args, kitsFlag, networkFlag, layoutFlag)
 			}
 
 			l, err := newLifecycle(cfg)
@@ -52,6 +54,7 @@ func newRunCmd() *cobra.Command {
 				Fresh:   fresh,
 				Attach:  !noAttach,
 				Network: networkFlag,
+				Layout:  layoutFlag,
 			}
 			if len(args) == 1 {
 				opts.Agent = args[0]
@@ -66,13 +69,15 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&fresh, "fresh", false, "remove any existing box for this project before creating")
 	cmd.Flags().StringVar(&kitsFlag, "kits", "", "override the kit list (comma-separated)")
 	cmd.Flags().StringVar(&networkFlag, "network", "", "override network.mode for this run")
+	cmd.Flags().StringVar(&layoutFlag, "layout", "",
+		"zellij layout name (focus|reviewer|auditor|<custom>); overrides [zellij].layout config")
 	cmd.Flags().BoolVar(&noAttach, "no-attach", false, "create/start the box but don't attach")
 	cmd.Flags().BoolVar(&detachOnExit, "detach-on-exit", false, "stop the container when the agent process exits")
 	return cmd
 }
 
 // runDryRun preserves Phase 1's dry-run behavior. Extracted so RunE stays clean.
-func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, networkFlag string) error {
+func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, networkFlag, layoutFlag string) error {
 	// Apply per-command overrides.
 	c := cfg.Config
 	if networkFlag != "" {
@@ -134,9 +139,26 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 	if err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
+
+	// Resolve layout for dry-run output. Prefer --layout flag; fall back to
+	// config value (which defaults to "focus").
+	layoutName := layoutFlag
+	if layoutName == "" {
+		layoutName = c.Zellij.Layout
+	}
+	spec, err := zellij.Resolve(layoutName, home)
+	if err != nil {
+		return exitcode.Wrap(exitcode.InvalidArgs, err)
+	}
+
 	fmt.Fprintf(cmd.OutOrStdout(), "# project_id = %s\n", id)
 	fmt.Fprintf(cmd.OutOrStdout(), "# kits = %s\n", strings.Join(kitList, ","))
 	fmt.Fprintf(cmd.OutOrStdout(), "# network = %s\n", c.Network.Mode)
+	if spec.Kind == zellij.LayoutCustom {
+		fmt.Fprintf(cmd.OutOrStdout(), "# layout = %s (%s, %s)\n", spec.Name, spec.Kind, spec.Path)
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "# layout = %s (%s)\n", spec.Name, spec.Kind)
+	}
 	fmt.Fprint(cmd.OutOrStdout(), rs.ToShell(c.Runtime))
 	return nil
 }

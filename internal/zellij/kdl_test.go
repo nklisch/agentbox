@@ -115,6 +115,110 @@ func TestModeRun_IsZeroValue(t *testing.T) {
 	}
 }
 
+// ---- Layout name dispatch ----
+
+func TestGenerateKDL_LayoutName_FocusExplicit(t *testing.T) {
+	// Explicit "focus" should produce the same output as empty LayoutName.
+	withName := GenerateKDL(Layout{Mode: ModeRun, LayoutName: "focus", AgentCmd: []string{"claude"}, ProjectAbs: "/p", Shell: "zsh"})
+	withEmpty := GenerateKDL(Layout{Mode: ModeRun, LayoutName: "", AgentCmd: []string{"claude"}, ProjectAbs: "/p", Shell: "zsh"})
+	if withName != withEmpty {
+		t.Errorf("LayoutName=focus should produce identical output to LayoutName=''")
+	}
+}
+
+func TestGenerateKDL_LayoutName_CustomKDL(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "myown",
+		CustomKDL:  "custom body",
+	})
+	if out != "custom body" {
+		t.Errorf("CustomKDL should be returned verbatim, got: %q", out)
+	}
+}
+
+func TestGenerateKDL_LayoutName_CustomKDL_OverridesLayoutName(t *testing.T) {
+	// CustomKDL is checked before LayoutName dispatch for run mode.
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "focus",
+		CustomKDL:  "custom takes priority",
+	})
+	if out != "custom takes priority" {
+		t.Errorf("CustomKDL should take priority over LayoutName, got: %q", out)
+	}
+}
+
+// ---- reviewer layout ----
+
+func TestGenerateKDL_Reviewer_HasAllPanes(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "reviewer",
+		AgentCmd:   []string{"claude"},
+		ProjectAbs: "/p",
+		Shell:      "zsh",
+	})
+	for _, frag := range []string{
+		`tab name="reviewer" focus=true`,
+		`pane size="50%" name="agent"`,
+		`pane size="50%" name="diff"`,
+		`pane size="30%" name="tests"`,
+		`command "box-agent"`,
+		`args "claude"`,
+		`command "watch"`,
+		`args "--color" "-n" "2" "box-diff-watch"`,
+		`command "box-tests-watch"`,
+		`tab name="shell"`,
+		`default_tab_template`,
+		`plugin location="tab-bar"`,
+		`plugin location="status-bar"`,
+	} {
+		if !strings.Contains(out, frag) {
+			t.Errorf("reviewer layout missing fragment %q in:\n%s", frag, out)
+		}
+	}
+}
+
+func TestGenerateKDL_Reviewer_TwoTabs(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "reviewer",
+		AgentCmd:   []string{"claude"},
+		ProjectAbs: "/p",
+		Shell:      "zsh",
+	})
+	if got := strings.Count(out, "tab name="); got != 2 {
+		t.Errorf("reviewer layout: want 2 tabs, got %d:\n%s", got, out)
+	}
+}
+
+func TestGenerateKDL_Reviewer_EmptyAgentCmd_NotWrapped(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "reviewer",
+		AgentCmd:   nil,
+		ProjectAbs: "/p",
+		Shell:      "zsh",
+	})
+	if strings.Contains(out, "box-agent") {
+		t.Errorf("empty AgentCmd should not be wrapped in box-agent in reviewer layout:\n%s", out)
+	}
+}
+
+func TestGenerateKDL_Reviewer_Cwd(t *testing.T) {
+	out := GenerateKDL(Layout{
+		Mode:       ModeRun,
+		LayoutName: "reviewer",
+		AgentCmd:   []string{"claude"},
+		ProjectAbs: "/home/u/my project",
+		Shell:      "zsh",
+	})
+	if !strings.Contains(out, `cwd "/home/u/my project"`) {
+		t.Errorf("reviewer layout missing quoted cwd:\n%s", out)
+	}
+}
+
 // ---- v0.2.3: tab-bar + status-bar via default_tab_template ----
 
 func TestGenerateKDL_Run_HasTabAndStatusBars(t *testing.T) {

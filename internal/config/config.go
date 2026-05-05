@@ -15,6 +15,7 @@ type Config struct {
 	Resources    Resources        `toml:"resources" json:"resources"`
 	Containers   Containers       `toml:"containers" json:"containers"`
 	Shell        Shell            `toml:"shell" json:"shell"`
+	Zellij       Zellij           `toml:"zellij" json:"zellij"`
 	Agents       map[string]Agent `toml:"agents" json:"agents"`
 }
 
@@ -71,6 +72,14 @@ type Shell struct {
 	Aliases map[string]string `toml:"aliases" json:"aliases"`
 }
 
+// Zellij holds the zellij-related run-time options.
+type Zellij struct {
+	// Layout names a built-in ("focus", "reviewer", "auditor") or a
+	// user-defined layout file at ~/.config/agentbox/layouts/<name>.kdl.
+	// Empty falls back to "focus" at resolution time.
+	Layout string `toml:"layout" json:"layout"`
+}
+
 type Agent struct {
 	Kits []string `toml:"kits" json:"kits"`
 	Cmd  []string `toml:"cmd" json:"cmd"`
@@ -124,6 +133,9 @@ func DefaultConfig() Config {
 			Shell:   "zsh",
 			Prompt:  "starship",
 			History: true,
+		},
+		Zellij: Zellij{
+			Layout: "focus",
 		},
 		Agents: map[string]Agent{
 			"claude": {

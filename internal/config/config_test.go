@@ -288,3 +288,48 @@ func TestLoad_EmptyProjectPath(t *testing.T) {
 		t.Errorf("runtime = %q, want default %q", cfg.Runtime, "podman")
 	}
 }
+
+// --- Unit 1: [zellij] config schema ---
+
+func TestDefaultConfig_ZellijLayoutIsFocus(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if cfg.Zellij.Layout != "focus" {
+		t.Errorf("DefaultConfig().Zellij.Layout = %q, want %q", cfg.Zellij.Layout, "focus")
+	}
+}
+
+func TestLoad_ZellijLayoutFromTOML(t *testing.T) {
+	tmp := t.TempDir()
+	globalPath := filepath.Join(tmp, "config.toml")
+	if err := os.WriteFile(globalPath, []byte("[zellij]\nlayout = \"reviewer\""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := config.Paths{Global: globalPath, Project: ""}
+	cfg, err := config.Load(paths)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Zellij.Layout != "reviewer" {
+		t.Errorf("Zellij.Layout = %q, want %q", cfg.Zellij.Layout, "reviewer")
+	}
+}
+
+func TestLoad_ZellijProjectOverridesGlobal(t *testing.T) {
+	tmp := t.TempDir()
+	globalPath := filepath.Join(tmp, "config.toml")
+	projectPath := filepath.Join(tmp, ".agentbox.toml")
+	if err := os.WriteFile(globalPath, []byte("[zellij]\nlayout = \"reviewer\""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectPath, []byte("[zellij]\nlayout = \"auditor\""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := config.Paths{Global: globalPath, Project: projectPath}
+	cfg, err := config.Load(paths)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Zellij.Layout != "auditor" {
+		t.Errorf("Zellij.Layout = %q, want project value %q", cfg.Zellij.Layout, "auditor")
+	}
+}

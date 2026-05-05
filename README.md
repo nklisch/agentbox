@@ -345,6 +345,25 @@ system-wide, the corresponding paths are `/etc/bash_completion.d/`,
 
 ---
 
+## Layouts
+
+`agentbox run --layout <name>` selects a zellij layout. Built-ins:
+
+- `focus` (default) — agent + git status ticker + system stats. The original layout.
+- `reviewer` — agent + live diff vs base branch + watchexec test runner.
+- `auditor` — agent + live trail of Claude Code tool calls (Claude only).
+
+Sticky per project: set `[zellij] layout = "..."` in `.agentbox.toml`, or globally in
+`~/.config/agentbox/config.toml`.
+
+Drop your own KDL at `~/.config/agentbox/layouts/<name>.kdl` to add a custom layout —
+template variables (`{{.ProjectAbs}}`, `{{.Shell}}`, `{{.AgentCmdFull}}`) are substituted
+before zellij parses the file.
+
+See [docs/LAYOUTS.md](docs/LAYOUTS.md) for the full reference.
+
+---
+
 ## Uninstall
 
 ```sh

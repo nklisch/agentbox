@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# box-diff-watch — render a delta-formatted diff of HEAD against the
+# detected base branch. Designed for `watch --color -n 2 box-diff-watch`
+# in the reviewer layout's diff pane.
+#
+# Base branch detection (in order):
+#   1. git symbolic-ref refs/remotes/origin/HEAD → strip prefix
+#   2. local "main" branch
+#   3. local "master" branch
+#   4. fallback: HEAD~5 (last 5 commits' worth)
+#
+# Side-by-side mode is enabled when terminal is wide enough (≥160 cols).
+
+set -u
+
+base=""
+
+# 1. Try origin/HEAD.
+if origin_head=$(git symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null); then
+    base="${origin_head#refs/remotes/origin/}"
+fi
+
+# 2. Try main / master.
+if [ -z "$base" ] && git rev-parse --verify --quiet main >/dev/null 2>&1; then
+    base="main"
+fi
+if [ -z "$base" ] && git rev-parse --verify --quiet master >/dev/null 2>&1; then
+    base="master"
+fi
+
+# 3. Header + delta diff.
+hdr() { printf '\033[1;2m── %s ──\033[0m\n' "$1"; }
+
+if [ -n "$base" ]; then
+    hdr "diff against $base"
+    range="$base..HEAD"
+else
+    hdr "no base branch — last 5 commits"
+    range="HEAD~5..HEAD"
+fi
+
+# Side-by-side when terminal is wide.
+cols=$(tput cols 2>/dev/null || echo 80)
+delta_args=(--line-numbers --color-only)
+if [ "$cols" -ge 160 ]; then
+    delta_args+=(--side-by-side)
+fi
+
+# `git diff` returns 0 even with no diff; delta passes through cleanly.
+git diff --color=always "$range" 2>/dev/null | delta "${delta_args[@]}"
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+    echo
+    hdr "git diff failed for $range"
+fi

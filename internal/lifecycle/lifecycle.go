@@ -227,11 +227,33 @@ func writeEffectiveConfig(projID string, cfg config.Config) error {
 	return state.WriteEffectiveConfig(projID, buf.Bytes())
 }
 
-// writeLayout serialises a zellij layout and writes it to
-// <state-dir>/sessions/<id>/layout.kdl (bind-mounted ro into the box at
-// /etc/agentbox/layout.kdl). Called before zellijAttach so the file is never
-// empty when zellij starts.
-func writeLayout(projID, projAbs string, mode zellij.Mode, agentCmd []string, shellName string) error {
+// writeLayoutFor renders the resolved layout to <state>/layout.kdl.
+// For built-ins, it dispatches via GenerateKDL. For custom layouts, it
+// loads the file, runs template substitution, and writes the result.
+func writeLayoutFor(
+	projID, projAbs string,
+	spec zellij.LayoutSpec,
+	mode zellij.Mode,
+	agentCmd []string,
+	shellName string,
+	trailFile string, // empty unless trail is wired (Group B)
+) error {
+	layout := zellij.Layout{
+		Mode:       mode,
+		AgentCmd:   agentCmd,
+		ProjectAbs: projAbs,
+		Shell:      shellName,
+		LayoutName: spec.Name,
+		TrailFile:  trailFile,
+	}
+	if spec.Kind == zellij.LayoutCustom {
+		body, err := zellij.LoadCustom(spec.Path, zellij.BuildTemplateVars(layout))
+		if err != nil {
+			return exitcode.Wrap(exitcode.Generic, err)
+		}
+		layout.CustomKDL = body
+	}
+	body := zellij.GenerateKDL(layout)
 	dir, err := state.SessionDir(projID)
 	if err != nil {
 		return err
@@ -239,13 +261,14 @@ func writeLayout(projID, projAbs string, mode zellij.Mode, agentCmd []string, sh
 	if err := state.EnsureDir(dir); err != nil {
 		return err
 	}
-	body := zellij.GenerateKDL(zellij.Layout{
-		Mode:       mode,
-		AgentCmd:   agentCmd,
-		ProjectAbs: projAbs,
-		Shell:      shellName,
-	})
 	return os.WriteFile(filepath.Join(dir, "layout.kdl"), []byte(body), 0o600)
+}
+
+// writeLayout is a thin shim used for shell-mode and attach-without-spec paths.
+// It always uses the "focus" built-in layout with no trail file.
+func writeLayout(projID, projAbs string, mode zellij.Mode, agentCmd []string, shellName string) error {
+	spec := zellij.LayoutSpec{Name: "focus", Kind: zellij.LayoutBuiltin}
+	return writeLayoutFor(projID, projAbs, spec, mode, agentCmd, shellName, "")
 }
 
 // stdinIsTerminal is a package-level variable so tests can swap it.
@@ -267,6 +290,7 @@ type RunOpts struct {
 	Attach   bool
 	Network  string // override Cfg.Network.Mode for this run
 	NoZellij bool   // skip zellij and use bare-shell exec (only meaningful for Shell)
+	Layout   string // --layout flag value; empty falls back to cfg.Zellij.Layout
 }
 
 // Run is the high-level run command. Always writes the ModeRun layout so
@@ -297,9 +321,25 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 		return exitcode.New(exitcode.InvalidArgs, "agent %q not defined", agent)
 	}
 
+	// Resolve the layout name: --layout flag wins, then config, then "focus".
+	home, _ := os.UserHomeDir()
+	layoutName := opts.Layout
+	if layoutName == "" {
+		layoutName = l.Cfg.Zellij.Layout
+	}
+	spec, err := zellij.Resolve(layoutName, home)
+	if err != nil {
+		return exitcode.Wrap(exitcode.InvalidArgs, err)
+	}
+
+	// Group B: trail wiring decision. For Group A, trailFile is always empty.
+	// The Group B agent will wire the trail mount and BOX_TRAIL_FILE env var
+	// when spec.Name == "auditor" && agent == "claude".
+	var trailFile string
+
 	// Write the layout unconditionally so `agentbox attach .` can reconnect
 	// even when --no-attach was used to start the box.
-	if err := writeLayout(box.ProjectID, box.CWD, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell); err != nil {
+	if err := writeLayoutFor(box.ProjectID, box.CWD, spec, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell, trailFile); err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
 
