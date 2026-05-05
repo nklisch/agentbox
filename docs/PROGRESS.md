@@ -47,13 +47,16 @@
 
 ## Deviations
 
-(none yet)
+### Phase 1: SPEC.md `[runtime.containers]` is invalid TOML
+- **Expected:** SPEC.md shows `runtime = "podman"` (top-level key) alongside `[runtime.containers]` (sub-table). TOML forbids a key from being both a value and a table-parent.
+- **Actual:** Renamed `[runtime.containers]` → `[containers]` in the config schema. Top-level `runtime = "podman"` is unchanged.
+- **Impact:** Minor user-facing rename. SPEC.md should be updated to match (queued under "Suggested Additions" — covered by `/update-documentation` after Phase 1 implementation).
 
 ---
 
 ## Suggested Additions
 
-(none yet)
+- Update SPEC.md to reflect `[containers]` rename (deviation from Phase 1 design).
 
 ---
 
