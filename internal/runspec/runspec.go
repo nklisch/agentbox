@@ -206,12 +206,15 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		// CapDrop ALL stays; CapAdd layers specific caps back on top.
 		args.CapAdd = append(args.CapAdd, cfg.Containers.ExtraCaps...)
 		args.Devices = append(args.Devices, cfg.Containers.ExtraDevices...)
-		args.SecOpt = append(args.SecOpt,
-			"seccomp=/etc/agentbox/seccomp/containers.json",
-			"unmask=/proc/sys/net/ipv4",
-		)
-		// Seccomp profile bind-mount: host path → in-container path referenced by SecOpt.
+		args.SecOpt = append(args.SecOpt, "unmask=/proc/sys/net/ipv4")
+		// `--security-opt seccomp=<path>` is read by podman from the HOST
+		// filesystem at create time, before the container's filesystem
+		// exists. The bundled profile has to be referenced by its host path
+		// (lifecycle puts it under <state>/seccomp/containers.json and sets
+		// SeccompPath). The in-container bind mount below is for in-box
+		// introspection only; podman never reads it for seccomp.
 		if in.SeccompPath != "" {
+			args.SecOpt = append(args.SecOpt, "seccomp="+in.SeccompPath)
 			args.Mounts = append(args.Mounts, Mount{
 				Source: in.SeccompPath,
 				Target: "/etc/agentbox/seccomp/containers.json",

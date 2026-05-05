@@ -1,6 +1,7 @@
 package container
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,24 @@ import (
 
 	"github.com/nklisch/agentbox/internal/runspec"
 )
+
+// runQuiet runs cmd capturing stderr; on non-zero exit, the returned error
+// includes the trimmed stderr so callers (and users) see why podman failed.
+// stdout is discarded — these commands don't return data on stdout for
+// success paths the lifecycle uses.
+func runQuiet(label string, cmd *exec.Cmd) error {
+	var stderr bytes.Buffer
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return fmt.Errorf("%s: %w: %s", label, err, msg)
+		}
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	return nil
+}
 
 // PodmanRuntime shells out to `podman` (or `docker`).
 type PodmanRuntime struct {
@@ -73,29 +92,17 @@ func (r *PodmanRuntime) Create(args runspec.PodmanCreateArgs) error {
 	argv = append(argv, args.Image)
 	argv = append(argv, args.Argv...)
 
-	cmd := exec.Command(r.Bin, argv...)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s create: %w", r.Bin, err)
-	}
-	return nil
+	return runQuiet(r.Bin+" create", exec.Command(r.Bin, argv...))
 }
 
 // Start runs `<bin> start <name>`.
 func (r *PodmanRuntime) Start(name string) error {
-	cmd := exec.Command(r.Bin, "start", name)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	return cmd.Run()
+	return runQuiet(r.Bin+" start "+name, exec.Command(r.Bin, "start", name))
 }
 
 // Stop runs `<bin> stop <name>`.
 func (r *PodmanRuntime) Stop(name string) error {
-	cmd := exec.Command(r.Bin, "stop", name)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	return cmd.Run()
+	return runQuiet(r.Bin+" stop "+name, exec.Command(r.Bin, "stop", name))
 }
 
 // Inspect returns the Box for name. Status=Missing if no such container.

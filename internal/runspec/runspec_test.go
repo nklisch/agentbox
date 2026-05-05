@@ -162,6 +162,9 @@ func TestBuildPodmanCreateArgs_ContainersEnable(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Containers.Enable = true
 	in := defaultInput()
+	// SeccompPath must be populated for the seccomp= SecOpt to appear
+	// (lifecycle is responsible for this in production; tests must mirror).
+	in.SeccompPath = "/host/state/seccomp/containers.json"
 
 	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
 	if err != nil {
@@ -171,7 +174,7 @@ func TestBuildPodmanCreateArgs_ContainersEnable(t *testing.T) {
 	hasSeccomp := false
 	hasUnmask := false
 	for _, s := range args.SecOpt {
-		if strings.HasPrefix(s, "seccomp=") {
+		if s == "seccomp="+in.SeccompPath {
 			hasSeccomp = true
 		}
 		if strings.HasPrefix(s, "unmask=") {
@@ -179,10 +182,32 @@ func TestBuildPodmanCreateArgs_ContainersEnable(t *testing.T) {
 		}
 	}
 	if !hasSeccomp {
-		t.Error("expected seccomp= in SecOpt when Containers.Enable=true")
+		t.Errorf("expected seccomp=%s in SecOpt, got %v", in.SeccompPath, args.SecOpt)
 	}
 	if !hasUnmask {
-		t.Error("expected unmask= in SecOpt when Containers.Enable=true")
+		t.Errorf("expected unmask= in SecOpt when Containers.Enable=true, got %v", args.SecOpt)
+	}
+}
+
+// Regression: when Containers.Enable=true but lifecycle hasn't populated
+// SeccompPath, runspec must NOT emit a `seccomp=` SecOpt referencing an
+// in-container path — podman reads --security-opt at create time from the
+// host filesystem. Emitting a non-existent host path makes podman create
+// exit 125. (Bug surfaced after v0.2.0 flipped Containers.Enable default.)
+func TestBuildPodmanCreateArgs_ContainersEnable_NoSeccompOptWithoutPath(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Containers.Enable = true
+	in := defaultInput()
+	// SeccompPath intentionally empty.
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	for _, s := range args.SecOpt {
+		if strings.HasPrefix(s, "seccomp=") {
+			t.Errorf("seccomp= SecOpt should be absent when SeccompPath is empty, got %q", s)
+		}
 	}
 }
 
@@ -704,6 +729,7 @@ func TestToShell_ContainersEnable_HasCapAddAndDevice(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Containers.Enable = true
 	in := defaultInput()
+	in.SeccompPath = "/host/state/seccomp/containers.json" // required for seccomp= SecOpt
 
 	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
 	if err != nil {
