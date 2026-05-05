@@ -2,4 +2,4 @@
 /agentbox-netfilter
 dist/
 *.test
-.claude/
+.claude/scheduled_tasks.lock
