@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Started:** 2026-05-04
 **Last updated:** 2026-05-05
-**Phases since last refactor:** 3
+**Phases since last refactor:** 4
 **Total refactor passes:** 0
 
 ---
@@ -15,8 +15,8 @@
 | 1 | CLI scaffold, config loading, dry-run | done | 2026-05-05 |
 | 2 | Kit pipeline, base kit, `agentbox build` | done | 2026-05-05 |
 | 3 | Container lifecycle — run / shell / exec / attach / ls / rm | done | 2026-05-05 |
-| 4 | Zellij-in-box, layout generation, `box` helpers | active | — |
-| 5 | Runtime kits + agent kits + agent integration | pending | — |
+| 4 | Zellij-in-box, layout generation, `box` helpers | done | 2026-05-05 |
+| 5 | Runtime kits + agent kits + agent integration | active | — |
 | 6 | Network policy — `safe` + `allowlist` + CoreDNS sidecar | pending | — |
 | 7 | `containers` kit + nested rootless podman + `[runtime.containers]` | pending | — |
 | 8 | macOS support, Docker fallback, completion, ship | pending | — |
@@ -30,6 +30,44 @@
 - **Investigation:** Examined `internal/kits/podman.go` (89 LOC) and `internal/container/podman.go` (235 LOC) for duplication. Both use `errors.As(err, &ee)` for `*exec.ExitError` discrimination, but each call site interprets the non-zero exit differently (image-absent vs. container-missing vs. inner-exit-code-propagation vs. already-gone). Extracting a shared helper would either lose the per-call meaning or save fewer than 20 lines at the cost of an indirection.
 - **Decision:** Skip. Bump default cadence to **every 4 phases** for the next round (phases 1-3 were independent subsystems with minimal overlap — see autopilot decision framework "Adjust later (4 phases)").
 - **Counter NOT reset.** phases_since_refactor stays at 3; next gate fires at 4.
+
+### After Phase 4: gate triggered, refactor skipped again
+- **Trigger:** phases_since_refactor=4 (raised cadence).
+- **Investigation:** Phase 4 added one new package (`internal/zellij`) — pure string output, no duplication with existing code. Lifecycle grew Run/Shell/Attach into zellij paths but they share `zellijAttach` already. `box-info` script bash growth (~80 LOC) is a single-file concern, not library duplication. `runspec` env-vars list is now 8 entries; could be tabularized but currently readable.
+- **Decision:** Skip. Wait for Phase 5 to re-evaluate; Phase 5 ships ~10 kits and may surface real patterns worth extracting (kit-install-helpers, version-pinning conventions, etc.).
+- **Counter NOT reset.** phases_since_refactor stays at 4. Next gate fires at 5 (Phase 5's own gate, as designed).
+
+---
+
+## Phase 4 Notes
+
+What's now possible that wasn't before:
+- `agentbox run` opens a **zellij** session inside the box: agent in 70% top
+  pane, git ticker + `btm` stats sharing the bottom 30%, separate "shell" tab
+  with zsh. Detach with Ctrl+p d, walk away, `agentbox attach .` reconnects to
+  the same session.
+- `agentbox shell` (default) opens a single-pane zellij — gives a familiar
+  "agentbox" prompt for scripts using `expect`. `agentbox shell --no-zellij`
+  drops to bare zsh for non-interactive scripting.
+- `box info` inside the box prints the full CLI.md format: project_id,
+  project, cwd, agent, kits, kit_image, network, mounts table (rw/ro per
+  bind mount via findmnt), resources (cpu.max + memory.max + pids.max from
+  cgroup v2), created. Degrades to `n/a` outside agentbox; exits 0.
+- `box save <file>` actually persists across `agentbox rm`. The host's
+  `~/.local/share/agentbox/sessions/<id>/saved/` directory is bind-mounted at
+  `/root/.local/share/agentbox-saved` inside the box; AGENTBOX_SAVED_DIR points
+  at the in-container path so the script writes to the mount.
+- The interactive ROADMAP test checkpoint (expect script exercising attach +
+  detach + reattach) is left for the user's manual verification — zellij needs
+  a real TTY which the orchestrator's bash environment can't supply.
+
+Implementation stats:
+- 1 design pass, 1 implementation orchestration (single Sonnet agent), 1 hot-fix
+  commit (AGENTBOX_SAVED_DIR was pointing at the host path).
+- New package: `internal/zellij` (KDL generator, 8 golden tests).
+- Total files touched: ~12 (3 new, 9 edited).
+- Image size: 417 MB (unchanged from Phase 2; box-info polish added <1 KB).
+- Commits: design (`49f1891`), implementation (`edb86eb`), saved-dir fix (`e5e9bb0`).
 
 ---
 
@@ -170,6 +208,28 @@ Implementation stats:
 - **Chose:** When `!isTerminal(os.Stdin)`, print `<project_id> (running)` and exit 0.
 - **Alternative:** Run `[zsh, -c, exit]` (works but is surprising — user might expect their stdin to feed into zsh).
 - **Reasoning:** Phase 4 replaces this whole path with zellij. The non-TTY path is for scripted use ("is this box up?") where the liveness signal is enough. Real interactive use is unaffected.
+
+### Phase 4: AGENTBOX_SAVED_DIR points to in-container mount target, not host path
+- **Context:** Phase 3's runspec set `AGENTBOX_SAVED_DIR = in.StateDir + "/saved"` (the host path). Phase 4's box-save script reads that env var and `cp $src $dst`. Inside the container, the host path doesn't resolve — `mkdir -p` made the container-side host-shaped directory and silently dropped the file there. `box save` reported success but nothing reached the host's `saved/`.
+- **Chose:** Set `AGENTBOX_SAVED_DIR` to the literal in-container mount target `/root/.local/share/agentbox-saved`. The mount Target in the same runspec block matches.
+- **Alternative:** Make box-save smarter (translate host paths to container paths). Worse — duplicates path knowledge in two places.
+- **Reasoning:** Single Source of Truth. The env var is the path the script will write to; it must be the in-container path. Comment in runspec.go now says so explicitly.
+
+### Phase 4: zellij KDL syntax verified at write time — design's syntax was correct
+- **Context:** CLAUDE.md flags zellij KDL as "fast-moving — verify, don't guess." The design specified syntax based on zellij docs but warned that field names rotate.
+- **Chose:** Implementer dumped `zellij setup --dump-layout default` from the base kit's zellij 0.44.1 and confirmed every field name in the design matched. No KDL adjustments needed.
+- **Reasoning:** The design's spelling (`split_direction`, `pane size="..." name="..."`, `command`/`args`/`cwd`, `tab name="..." focus=true`) is correct for zellij 0.44.1. Future zellij upgrades may change this — re-verify if bumping.
+
+### Phase 4: Lifecycle test seam exposed as `SetStdinIsTerminal`
+- **Context:** Tests for Run/Shell/Attach need to control whether stdin appears as a TTY without actually allocating one.
+- **Chose:** Package-level var `stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }` plus an exported `SetStdinIsTerminal(fn) restoreFn` helper. Tests call `defer lifecycle.SetStdinIsTerminal(func() bool { return true })()`.
+- **Alternative:** Inject as a Lifecycle field — would require touching every existing test that constructs Lifecycle.
+- **Reasoning:** Boring, additive. Existing tests untouched.
+
+### Phase 4: Lifecycle.Run writes layout even with --no-attach
+- **Context:** Design said only write layout when actually attaching. But that means a later `agentbox attach .` finds an empty layout.kdl (touched by EnsureSession to satisfy the mount). Tests asserted layout.kdl is non-empty after `run --no-attach`.
+- **Chose:** Always write the ModeRun layout in Lifecycle.Run, regardless of Attach.
+- **Alternative:** Have Attach always regenerate (it already does, defensively). Both work; current choice keeps the layout file authoritative immediately after creation.
 
 ### Phase 3: Default agent kits don't exist until Phase 5 — known gap
 - **Context:** `cfg.Agents["claude"].Kits = ["polyglot", "claude"]` per SPEC defaults, but only `base` exists in builtinkits/. Calling `agentbox run` in a fresh dir without override fails at kit resolution.
