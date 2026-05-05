@@ -62,8 +62,11 @@ over generality, and the docs are written for future-me, not for onboarding stra
 - **Not Windows.** Linux and macOS only. Maybe Windows later if I need it.
 - **Not a devcontainer replacement.** The kit is the *agent's* environment. The project's
   own build environment is the project's concern.
-- **Not for distribution.** No marketing, no onboarding, no Homebrew tap (yet). If it
-  spreads, fine. That's not why I'm building it.
+- **Not a marketed product.** No funnel, no onboarding, no Homebrew tap. Prebuilt
+  binaries exist (`curl | sh` and tarballs on GitHub Releases) so installing on a
+  fresh laptop is one command, but that's a calibration for the author's own
+  reprovisions — not a distribution push. If it spreads, fine. That's not why
+  I'm building it.
 
 ## The shape of the thing
 

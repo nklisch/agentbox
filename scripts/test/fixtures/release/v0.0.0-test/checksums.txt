@@ -1,0 +1,3 @@
+25d06902f00f429c0c5452ef5b12fe6a2721da6589b359a22b7a50b8396af080  agentbox_0.0.0-test_linux_amd64.tar.gz
+25d06902f00f429c0c5452ef5b12fe6a2721da6589b359a22b7a50b8396af080  agentbox_0.0.0-test_linux_arm64.tar.gz
+25d06902f00f429c0c5452ef5b12fe6a2721da6589b359a22b7a50b8396af080  agentbox_0.0.0-test_darwin_arm64.tar.gz

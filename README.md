@@ -20,9 +20,7 @@ over generality. If it works for you too, great.
 
 | Requirement | Linux | macOS |
 | ----------- | ----- | ----- |
-| **Go** ≥ 1.25 | to build the binaries | same |
 | **Podman** (preferred) or **Docker** | rootless podman | `podman machine` (no Docker Desktop required) |
-| **make** | for `make install` | same |
 | **iptables** + **ipset** | required for `safe` / `allowlist` network modes | not used (DNS-only on macOS) |
 | **passwordless sudo** for `iptables`, `ipset`, `agentbox-netfilter` | required for `safe` / `allowlist` | not used |
 
@@ -34,9 +32,105 @@ If you want to defer that setup, run with `--network open` until you're ready.
 
 ## Install
 
-### 1. Build from source
+Three options. Pick one.
 
-There are no release tarballs or Homebrew taps yet. Build it yourself:
+### Option 1: `curl | sh` (recommended)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nklisch/agentbox/main/scripts/install.sh | sh
+```
+
+Drops `agentbox` and `agentbox-netfilter` into `~/.local/bin/`, verifies the
+sha256 against the release's `checksums.txt`, and appends a sentinel-wrapped
+block to your shell rc so `~/.local/bin` is on `PATH`. On macOS it also strips
+the Gatekeeper quarantine attribute.
+
+Environment overrides:
+
+| Variable | Effect |
+| -------- | ------ |
+| `AGENTBOX_VERSION=v0.2.0` | Pin to a specific release tag (default: latest) |
+| `AGENTBOX_PREFIX=/usr/local/bin` | Install elsewhere (default: `~/.local/bin`) |
+| `AGENTBOX_NO_PATH=1` | Skip the shell-rc PATH edit |
+| `AGENTBOX_INSTALL_DEBUG=1` | Enable `set -x` tracing |
+
+Open a new shell, then:
+
+```sh
+agentbox --version
+agentbox doctor --fix
+```
+
+### Option 2: download a release tarball
+
+Browse [releases](https://github.com/nklisch/agentbox/releases) and grab the
+archive for your platform:
+
+| Platform | Archive |
+| -------- | ------- |
+| Linux x86_64 | `agentbox_<version>_linux_amd64.tar.gz` |
+| Linux arm64 | `agentbox_<version>_linux_arm64.tar.gz` |
+| macOS Apple Silicon | `agentbox_<version>_darwin_arm64.tar.gz` |
+
+```sh
+tar -xzf agentbox_*.tar.gz
+install -m 0755 agentbox agentbox-netfilter ~/.local/bin/
+```
+
+Verify against `checksums.txt` (also attached to each release):
+
+```sh
+sha256sum -c <(grep agentbox_*_linux_amd64.tar.gz checksums.txt)
+```
+
+### Option 3: `go install`
+
+If you already have Go (≥1.25):
+
+```sh
+go install github.com/nklisch/agentbox/cmd/agentbox@latest
+go install github.com/nklisch/agentbox/cmd/agentbox-netfilter@latest
+```
+
+`agentbox --version` will report `(devel)` because `go install` doesn't run
+the project's `-ldflags`. Use Option 1 or 2 if you want a stamped version.
+
+### macOS Apple Silicon: initialize Podman
+
+```sh
+podman machine init       # one-time
+podman machine start
+```
+
+`agentbox doctor --fix` will start a stopped machine for you on later runs.
+
+### Linux: configure passwordless sudo for `safe`/`allowlist`
+
+These network modes need `iptables`, `ipset`, and `agentbox-netfilter` to run
+as root. `agentbox doctor` resolves the right paths for your distro:
+
+```sh
+agentbox doctor      # look for the [WARN] sudo-iptables line
+```
+
+Drop the suggested line into `/etc/sudoers.d/agentbox` (mode `0440`, owner
+`root`) and validate with `sudo visudo -c`.
+
+If you skip this, run with `--network open` (less safe, no setup) or
+`--network off` (no network).
+
+### Verify
+
+```sh
+agentbox doctor --fix
+```
+
+Runs ten checks. `--fix` pulls the CoreDNS image and starts a stopped
+`podman machine`; everything else is reported with the corrective action.
+
+### Building from source
+
+For development or distros without prebuilt binaries:
 
 ```sh
 git clone https://github.com/nklisch/agentbox.git
@@ -44,84 +138,15 @@ cd agentbox
 make install
 ```
 
-`make install` builds two static (CGO-disabled) binaries and copies them to
-`~/.local/bin/`:
-
-- `agentbox` — the primary CLI.
-- `agentbox-netfilter` — a small helper that tails the CoreDNS sidecar's logs
-  and populates the per-box ipset used by the `safe` / `allowlist` egress
-  filter. Only invoked when those network modes are active.
-
-If you want a different prefix, override the install target by hand:
+Requires **Go** ≥ 1.25 and **make**. `make install` builds two static
+(`CGO_ENABLED=0`) binaries and copies them to `~/.local/bin/`. Override the
+prefix by hand if needed:
 
 ```sh
 make build
 install -m 0755 agentbox /usr/local/bin/agentbox
 install -m 0755 agentbox-netfilter /usr/local/bin/agentbox-netfilter
 ```
-
-### 2. Make sure the install dir is on `PATH`
-
-```sh
-echo $PATH | tr : '\n' | grep -qx "$HOME/.local/bin" || \
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
-```
-
-Open a new shell and confirm:
-
-```sh
-agentbox --version
-```
-
-### 3. (macOS only) Initialize a Podman machine
-
-```sh
-podman machine init       # one-time
-podman machine start
-```
-
-`agentbox doctor --fix` will start the machine for you on subsequent runs if
-it's stopped.
-
-### 4. (Linux, optional) Configure passwordless sudo for `safe`/`allowlist`
-
-These modes need `iptables` + `ipset` + `agentbox-netfilter` to run as root.
-The right paths vary by distro — `agentbox doctor` resolves them for your
-system and prints a copy-pasteable sudoers line:
-
-```sh
-agentbox doctor      # look for the [WARN] sudo-iptables line
-```
-
-A typical Fedora-family entry:
-
-```
-%wheel ALL=(root) NOPASSWD: /usr/bin/iptables, /usr/bin/ipset, /home/<you>/.local/bin/agentbox-netfilter
-```
-
-A typical Debian/Ubuntu entry:
-
-```
-%sudo ALL=(root) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ipset, /usr/local/bin/agentbox-netfilter
-```
-
-Drop your line into `/etc/sudoers.d/agentbox` (mode `0440`, owner `root`)
-and validate with `sudo visudo -c` before relying on it.
-
-If you skip this step, run with `--network open` (less safe, no setup
-required) or `--network off` (no network at all).
-
-### 5. Verify the install
-
-```sh
-agentbox doctor --fix
-```
-
-`doctor` runs ten checks (runtime, state dir, iptables/ipset, sudo, CoreDNS
-image, containers config, `podman machine`, kit cache, mount sources). The
-`--fix` flag pulls the CoreDNS image and starts a stopped `podman machine`
-automatically; everything else is reported with the corrective action so you
-can fix it by hand.
 
 ---
 
@@ -319,7 +344,11 @@ podman network ls --filter label=agentbox=1 -q | xargs -r podman network rm
 rm -rf ~/.local/share/agentbox ~/.config/agentbox
 ```
 
-If you set up the sudoers line in step 4, remove it via `visudo`.
+If you set up a sudoers line for `safe`/`allowlist`, remove it via `visudo`.
+
+# If you installed via curl|sh, also remove the sentinel-wrapped PATH block
+# from your shell rc (~/.zshrc, ~/.bashrc, or ~/.config/fish/config.fish):
+#   sed -i '/# >>> agentbox installer >>>/,/# <<< agentbox installer <<</d' ~/.zshrc
 
 ---
 

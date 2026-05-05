@@ -659,6 +659,14 @@ Implementation stats:
 
 ## Deviations
 
+### Easy install (post-v0.1.0)
+
+7. **Easy install landed (post-v0.1.0).** `scripts/install.sh` (curl | sh),
+   prebuilt tarballs on GitHub Releases via tag-triggered goreleaser, and a
+   documented `go install` path. Targets: linux/amd64, linux/arm64,
+   darwin/arm64. The legacy `make install` flow is preserved for development.
+   Homebrew tap and code signing remain deferred.
+
 ### Phase 1: SPEC.md `[runtime.containers]` is invalid TOML
 - **Expected:** SPEC.md shows `runtime = "podman"` (top-level key) alongside `[runtime.containers]` (sub-table). TOML forbids a key from being both a value and a table-parent.
 - **Actual:** Renamed `[runtime.containers]` → `[containers]` in the config schema. Top-level `runtime = "podman"` is unchanged.

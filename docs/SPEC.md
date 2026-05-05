@@ -400,13 +400,31 @@ host path is enough — edit on the host with whatever editor you already use.
 
 ## Installed binaries
 
-`make install` copies two binaries to `~/.local/bin/` (or the configured install prefix):
+Two binaries ship together; they must always live in the same prefix because
+`agentbox doctor`'s sudoers suggestion resolves `agentbox-netfilter` by real
+path.
 
 - **`agentbox`** — the primary CLI.
-- **`agentbox-netfilter`** — a small daemon that tails `podman logs --follow` of the CoreDNS
-  sidecar and populates an ipset (`abx-<12hex>-a`) used by an iptables FORWARD rule. Launched
-  by the CLI when `block_direct_ip = true` or `mode = allowlist`; must be reachable via
-  `sudo -n agentbox-netfilter` (add to sudoers alongside `iptables`/`ipset`).
+- **`agentbox-netfilter`** — a small daemon that tails `podman logs --follow`
+  of the CoreDNS sidecar and populates an ipset (`abx-<12hex>-a`) used by an
+  iptables FORWARD rule. Launched by the CLI when `block_direct_ip = true` or
+  `mode = allowlist`; must be reachable via `sudo -n agentbox-netfilter` (add
+  to sudoers alongside `iptables` / `ipset`).
+
+Install paths (canonical → fallback):
+
+1. **`curl | sh` installer** — `scripts/install.sh` on the `main` branch,
+   served via `raw.githubusercontent.com`. Default prefix `~/.local/bin`,
+   overridable with `AGENTBOX_PREFIX`. Verifies sha256 against the release's
+   `checksums.txt`. Idempotently amends the user's shell rc.
+2. **Prebuilt release tarballs** on GitHub Releases, named
+   `agentbox_<version>_<os>_<arch>.tar.gz` for `linux/amd64`, `linux/arm64`,
+   `darwin/arm64`. Each release also publishes `checksums.txt` (sha256). No
+   `darwin/amd64` build.
+3. **`go install`** for users who already have Go ≥1.25; lacks the version
+   ldflags injection, so `--version` reports `(devel)`.
+4. **`make install`** from a clone — the development path, retained for
+   local iteration.
 
 ## Constraints
 

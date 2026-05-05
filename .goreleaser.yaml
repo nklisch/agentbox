@@ -1,0 +1,83 @@
+version: 2
+
+project_name: agentbox
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: agentbox
+    main: ./cmd/agentbox
+    binary: agentbox
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/nklisch/agentbox/internal/version.Version={{.Version}}
+      - -X github.com/nklisch/agentbox/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/nklisch/agentbox/internal/version.Date={{.Date}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: darwin
+        goarch: amd64
+
+  - id: agentbox-netfilter
+    main: ./cmd/agentbox-netfilter
+    binary: agentbox-netfilter
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/nklisch/agentbox/internal/version.Version={{.Version}}
+      - -X github.com/nklisch/agentbox/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/nklisch/agentbox/internal/version.Date={{.Date}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: darwin
+        goarch: amd64
+
+archives:
+  - id: default
+    ids:
+      - agentbox
+      - agentbox-netfilter
+    formats: [tar.gz]
+    name_template: "agentbox_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: false
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  algorithm: sha256
+  name_template: "checksums.txt"
+
+changelog:
+  use: git
+  abbrev: -1
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "(?i)^chore"
+      - "^test:"
+      - "(?i)typo"
+      - "^Merge "
+
+snapshot:
+  version_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+release:
+  github:
+    owner: nklisch
+    name: agentbox
+  draft: false
+  prerelease: auto
+  mode: append

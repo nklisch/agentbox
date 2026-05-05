@@ -1,5 +1,6 @@
 /agentbox
 /agentbox-netfilter
+# goreleaser output
 dist/
 *.test
 .claude/scheduled_tasks.lock
