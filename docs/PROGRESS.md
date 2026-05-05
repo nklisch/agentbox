@@ -25,7 +25,11 @@
 
 ## Refactor Log
 
-(none yet — phases_since_refactor=1, default trigger is every 3 phases)
+### After Phase 3: gate triggered, refactor skipped
+- **Trigger:** phases_since_refactor=3 (default cadence).
+- **Investigation:** Examined `internal/kits/podman.go` (89 LOC) and `internal/container/podman.go` (235 LOC) for duplication. Both use `errors.As(err, &ee)` for `*exec.ExitError` discrimination, but each call site interprets the non-zero exit differently (image-absent vs. container-missing vs. inner-exit-code-propagation vs. already-gone). Extracting a shared helper would either lose the per-call meaning or save fewer than 20 lines at the cost of an indirection.
+- **Decision:** Skip. Bump default cadence to **every 4 phases** for the next round (phases 1-3 were independent subsystems with minimal overlap — see autopilot decision framework "Adjust later (4 phases)").
+- **Counter NOT reset.** phases_since_refactor stays at 3; next gate fires at 4.
 
 ---
 
