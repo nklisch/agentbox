@@ -29,12 +29,11 @@ type Box struct {
 	Role string `json:"role"`
 }
 
-// ContainerName returns the canonical podman container name for a box.
-// Mirrors project.ContainerName ("agentbox-<id>"). Defined here so the
-// container package is self-contained.
-func ContainerName(projectID string) string {
-	return "agentbox-" + projectID
-}
+// ContainerName returns the canonical podman container name for a project ID.
+func ContainerName(projectID string) string { return "agentbox-" + projectID }
+
+// NetworkName returns the canonical podman network name for a project ID.
+func NetworkName(projectID string) string { return "agentbox-net-" + projectID }
 
 // ExecOpts controls Runtime.Exec.
 type ExecOpts struct {

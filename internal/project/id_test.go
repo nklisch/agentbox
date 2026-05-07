@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/nklisch/agentbox/internal/container"
 	"github.com/nklisch/agentbox/internal/project"
 )
 
@@ -48,18 +49,18 @@ func TestIDFromPath_DifferentPaths(t *testing.T) {
 }
 
 func TestContainerName(t *testing.T) {
-	got := project.ContainerName("abc123")
+	got := container.ContainerName("abc123")
 	want := "agentbox-abc123"
 	if got != want {
-		t.Errorf("ContainerName(%q) = %q, want %q", "abc123", got, want)
+		t.Errorf("container.ContainerName(%q) = %q, want %q", "abc123", got, want)
 	}
 }
 
 func TestNetworkName(t *testing.T) {
-	got := project.NetworkName("abc123")
+	got := container.NetworkName("abc123")
 	want := "agentbox-net-abc123"
 	if got != want {
-		t.Errorf("NetworkName(%q) = %q, want %q", "abc123", got, want)
+		t.Errorf("container.NetworkName(%q) = %q, want %q", "abc123", got, want)
 	}
 }
 

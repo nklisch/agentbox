@@ -39,7 +39,7 @@ func (m *Manager) SpecFor(cfg config.Config, projectID string) Spec {
 	s := Spec{
 		ProjectID:   projectID,
 		Mode:        Mode(cfg.Network.Mode),
-		NetworkName: "agentbox-net-" + projectID,
+		NetworkName: container.NetworkName(projectID),
 		SidecarName: "agentbox-coredns-" + projectID,
 		Cfg:         cfg,
 	}

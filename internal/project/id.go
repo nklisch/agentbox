@@ -32,8 +32,3 @@ func Resolve() (id string, abs string, err error) {
 	return IDFromPath(abs), abs, nil
 }
 
-// ContainerName returns the canonical container name for a project_id.
-func ContainerName(id string) string { return "agentbox-" + id }
-
-// NetworkName returns the canonical podman network name for a project_id.
-func NetworkName(id string) string { return "agentbox-net-" + id }
