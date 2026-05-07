@@ -490,6 +490,38 @@ func TestRunDryRun_ContainsEnvVars(t *testing.T) {
 	}
 }
 
+// TestRunDryRun_KitImageMatchesPrintTag is a regression guard for a bug
+// where `agentbox run --dry-run` hashed the unresolved kit list while the
+// real run path resolves dependencies first. The two tags must match —
+// otherwise users see one image referenced in dry-run output and another
+// actually built.
+func TestRunDryRun_KitImageMatchesPrintTag(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	dryOut, _, err := runCmd(t, "run", "--dry-run")
+	if err != nil {
+		t.Fatalf("run --dry-run: %v", err)
+	}
+	// The default agent (claude) has Kits = ["polyglot", "claude"], which
+	// `claude` extends transitively to ["base", "polyglot", "node", "claude"].
+	tagOut, _, err := runCmd(t, "build", "--print-tag", "polyglot,claude")
+	if err != nil {
+		t.Fatalf("build --print-tag: %v", err)
+	}
+	wantTag := strings.TrimSpace(tagOut)
+	if !strings.Contains(dryOut, wantTag) {
+		t.Errorf("dry-run output does not contain the resolved kit_image tag %q\n--- dry-run ---\n%s",
+			wantTag, dryOut)
+	}
+}
+
 // ── Phase 4: zellij routing tests ────────────────────────────────────────────
 
 // fakeTerminal overrides the lifecycle.StdinIsTerminal seam so tests can

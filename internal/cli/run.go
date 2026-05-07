@@ -9,7 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nklisch/agentbox/internal/builtinkits"
 	"github.com/nklisch/agentbox/internal/exitcode"
+	"github.com/nklisch/agentbox/internal/kits"
 	"github.com/nklisch/agentbox/internal/lifecycle"
 	"github.com/nklisch/agentbox/internal/project"
 	"github.com/nklisch/agentbox/internal/runspec"
@@ -104,6 +106,18 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 		kitList = strings.Split(kitsFlag, ",")
 	}
 
+	// Resolve the kit list (walk depends_on, sort, dedupe) so the dry-run's
+	// kit_image tag and AGENTBOX_KITS env var match what the live run path
+	// would produce. Without this the dry-run hashes the unresolved request
+	// and reports a different sha than `agentbox build --print-tag` returns
+	// or the actual `agentbox run` would create.
+	userKitsDir, _ := userKitsDirPath()
+	reg := kits.NewRegistry(builtinkits.FS(), userKitsDir)
+	resolved, err := kits.Resolve(reg, kitList)
+	if err != nil {
+		return exitcode.Wrap(exitcode.KitBuild, err)
+	}
+
 	id, abs, err := project.Resolve()
 	if err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
@@ -131,7 +145,7 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 		ProjectAbs:  abs,
 		ProjectName: filepath.Base(abs),
 		Agent:       agent,
-		Kits:        kitList,
+		Kits:        resolved.Names(),
 		HomeDir:     home,
 		StateDir:    stateDir,
 		Created:     time.Now(),
@@ -156,6 +170,9 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 
 	fmt.Fprintf(cmd.OutOrStdout(), "# project_id = %s\n", id)
 	fmt.Fprintf(cmd.OutOrStdout(), "# kits = %s\n", strings.Join(kitList, ","))
+	if !sameSlice(kitList, resolved.Names()) {
+		fmt.Fprintf(cmd.OutOrStdout(), "# resolved = %s\n", strings.Join(resolved.Names(), ","))
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "# network = %s\n", c.Network.Mode)
 	if spec.Kind == zellij.LayoutCustom {
 		fmt.Fprintf(cmd.OutOrStdout(), "# layout = %s (%s, %s)\n", spec.Name, spec.Kind, spec.Path)
@@ -164,4 +181,19 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 	}
 	fmt.Fprint(cmd.OutOrStdout(), rs.ToShell(c.Runtime))
 	return nil
+}
+
+// sameSlice reports whether two string slices are element-wise equal.
+// Used by runDryRun to suppress the "# resolved = ..." line when the
+// requested kit list already matches the resolved one (no implicit deps).
+func sameSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
