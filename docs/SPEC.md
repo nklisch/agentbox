@@ -103,6 +103,16 @@ layout = "focus"   # focus | reviewer | auditor | <custom>
                    # Custom layouts live at ~/.config/agentbox/layouts/<name>.kdl.
                    # See docs/LAYOUTS.md for the full reference.
 
+[registry]
+# Kit-image registry pull. When enabled and every kit in the resolved list is a
+# built-in kit (no user shadowing), agentbox tries `podman pull <remote>` against
+# the version-pinned GHCR tag before falling back to a local build.
+# Pass --no-pull to skip the pull attempt unconditionally.
+enabled      = true                # set false to always build locally
+host         = "ghcr.io/nklisch/agentbox-kits"
+verify       = "none"              # "none" only; "cosign" is reserved, rejected at parse time
+pull_timeout = "5m"                # Go duration; 0 = no timeout
+
 [agents.claude]
 kits = ["polyglot", "claude"]
 cmd  = ["claude", "--dangerously-skip-permissions"]
@@ -162,7 +172,10 @@ collision is irrelevant for personal use.
    - **Exists, running**: skip to step 7.
    - **Exists, stopped**: `podman start` it. Skip to step 7.
    - **Doesn't exist**: continue.
-4. If `default_kits` image is not built or its tag is stale, build it (see KITS.md).
+4. If `default_kits` image is not built or its tag is stale, obtain it: try `podman pull`
+   from the registry if eligible (all built-in kits, `[registry] enabled = true`,
+   `--no-pull` not passed), then fall back to a local build. See "Kit image pull behavior"
+   below and KITS.md.
 5. `podman create` with the runtime spec (see "Runtime spec" below). Container starts on
    `sleep infinity`.
 6. Write `effective-config.toml` and `layout.kdl` to the session state directory.
@@ -171,6 +184,51 @@ collision is irrelevant for personal use.
 8. User detaches with zellij binding (`Ctrl+p d` by default). Container keeps running.
 
 `agentbox run --fresh` removes the existing box for this project (if any) before step 3.
+
+### Kit image pull behavior
+
+When `agentbox build` (or `agentbox run` calling build internally) needs a kit image, it
+checks three things before attempting a local build:
+
+1. **Cache hit** — if `~/.local/share/agentbox/cache/kits/<tag>.json` exists and all kit
+   content hashes match, the existing image is used as-is. No build or pull.
+2. **Registry pull** — if the cache miss falls through and all three eligibility conditions
+   hold, `podman pull <remote>` is attempted:
+   - `[registry] enabled = true` (the default)
+   - `--no-pull` not passed
+   - Every kit in the resolved list has `Source == "builtin"` (no user kit shadows a
+     built-in by name — see KITS.md)
+   On success, the remote ref is retagged as the canonical local tag
+   (`agentbox/<sha[:12]>`) and a cache entry with `source = "registry"` is written.
+   Subsequent runs hit the cache and skip the registry entirely.
+3. **Local build** — if the registry is disabled, ineligible, or the pull fails for any
+   reason, the existing Dockerfile-generate-and-`podman build` path runs as before.
+
+Pull failures are classified and surfaced to stderr as `[registry] ...` lines but never
+abort the build:
+
+| Failure kind | CLI output | Action |
+| ------------ | ---------- | ------ |
+| `NotFound` (tag absent) | silent | fall through to local build |
+| `Auth` (401/403) | visible warning + `podman login` suggestion | fall through |
+| `Network` (timeout, DNS failure) | visible warning | fall through |
+| `Unknown` | visible warning with raw stderr | fall through |
+
+The four pre-published kit-list compositions (multi-arch, `linux/amd64` + `linux/arm64`):
+
+| Tag nickname | Resolved kits |
+| ------------ | ------------- |
+| `polyglot-containers-claude` | `base, polyglot, containers, node, claude` |
+| `polyglot-containers-codex` | `base, polyglot, containers, node, codex` |
+| `polyglot-claude` | `base, polyglot, node, claude` |
+| `node-claude` | `base, node, claude` |
+
+Remote tag format: `<host>:<version>-<sha1[:12]>` (version without leading `v`). The CLI
+computes this deterministically from the same sha used for the local tag. The alias tags
+(`<version>-<nickname>`, `latest-<nickname>`) are published as a convenience for manual
+`podman pull`; the CLI always uses the sha-pinned form.
+
+See `docs/features/registry-images.design.md` for the full design.
 
 ### Disposal
 
@@ -371,7 +429,7 @@ sufficiently determined agent from misbehaving via legitimate channels.
       events.jsonl             # future: docker events + DNS log
   cache/
     kits/
-      <kit_image_tag>.json     # build metadata (kit list, content hashes, build timestamp)
+      <kit_image_tag>.json     # build metadata (kit list, content hashes, build timestamp, source)
 ```
 
 `agentbox rm <project_id>` deletes `sessions/<project_id>/`. The cache survives.
@@ -504,7 +562,9 @@ agentbox config [edit|show]       open or print effective config
 
 - macOS container-only volumes for big build dirs (`node_modules`, `target`). Deferred until
   perf is actually a problem.
-- Kit image registry distribution (so first run is `pull` not `build`). v0.3+.
+- ~~Kit image registry distribution (so first run is `pull` not `build`). v0.3+.~~ **Shipped
+  (v0.4.0).** `[registry]` config block + pull-then-build path in `agentbox build`/`run`.
+  See "Kit image pull behavior" above and `docs/features/registry-images.design.md`.
 - Worktree / auto-commit / sandbox-branch mode. Deferred indefinitely.
 - Snapshot / resume (`podman commit` + restart from snapshot). Deferred.
 - ttyd in the kit for browser-based attach. Out of scope.
@@ -517,3 +577,13 @@ agentbox config [edit|show]       open or print effective config
 - **`opencode` YOLO flag.** `opencode` has no root-level YOLO flag — `--dangerously-skip-permissions`
   only applies to the `opencode run` subcommand, not the TUI. Users who want auto-confirm for
   opencode must configure `cmd` in `[agents.opencode]` explicitly.
+- **`registry-reachable` doctor check returns 401 on working setups.** GHCR's OCI manifest
+  endpoint requires bearer-token negotiation for HEAD requests even on public images. The
+  check's HTTP probe cannot perform that exchange and surfaces an "auth required" warning
+  even when the registry is working and `podman pull` succeeds. The check is warn-only and
+  does not affect the pull path (`podman` handles the negotiation transparently). Fix:
+  replace the raw HEAD probe with a `podman manifest inspect` subprocess call, which goes
+  through the normal credential dance. Deferred.
+- **Cosign image verification.** `[registry] verify = "cosign"` is reserved at the config
+  layer (rejected at parse time with a clear error) but not implemented. Add when there is a
+  credible threat model that requires it.

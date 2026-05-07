@@ -151,6 +151,19 @@ agentbox rm .
 > layout adds a live Claude Code tool-call trail pane via a shadow `settings.json` mount and
 > JSONL hooks. See docs/LAYOUTS.md and docs/TRAIL.md for the full reference.
 
+> **Post-v0.3.0 work (v0.4.0):** kit-image registry distribution shipped. The deferred item
+> "Kit image registry distribution (so first run is `pull` not `build`)" is complete.
+> `agentbox build` and `agentbox run` now attempt `podman pull` from GHCR before falling
+> back to a local build. New flags: `--no-pull` (skip registry), `--emit-context <dir>`
+> (stage Dockerfile + kit dirs for CI), `--print-tag` (print local tag without building).
+> New config block: `[registry]` (`enabled`, `host`, `verify`, `pull_timeout`). New doctor
+> check: `registry-reachable`. Four pre-published multi-arch kit-list images ship on every
+> `v*` tag via the `kit-images.yml` CI workflow. Additionally, `sccache` and `cargo-watch`
+> now install from prebuilt GitHub-release binaries in the `polyglot` and `rust` kits —
+> the previous `cargo install` approach OOM-killed on memory-constrained hosts (and made
+> CI's QEMU-emulated arm64 builds effectively infeasible). See docs/SPEC.md "Kit image pull
+> behavior" and docs/features/registry-images.design.md for the full design.
+
 ---
 
 ## Phase 5: Runtime kits + agent kits + agent integration  *(parallel with P6, P7)*

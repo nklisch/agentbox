@@ -252,9 +252,23 @@ agentbox build [kit_list]
 │    If ~/.local/share/agentbox/cache/kits/<tag>.json exists   │
 │    AND content hashes match → no-op, use existing image.     │
 └──────────────────┬───────────────────────────────────────────┘
-                   ▼
+                   ▼ (cache miss)
 ┌──────────────────────────────────────────────────────────────┐
-│ 4. Generate Dockerfile                                       │
+│ 4. Registry pull (optional, eligible lists only)             │
+│    Eligibility: [registry] enabled = true, --no-pull not     │
+│    passed, and every kit in the resolved list is a built-in  │
+│    kit (no user kit shadows a built-in by name).             │
+│                                                              │
+│    podman pull ghcr.io/nklisch/agentbox-kits:<ver>-<sha>     │
+│    podman tag  <remote-ref> <kit_image_tag>                  │
+│    Write cache entry (source = "registry").                  │
+│                                                              │
+│    Pull failures fall through to step 5 — never abort.      │
+│    NotFound: silent. Auth/Network/Unknown: visible warning.  │
+└──────────────────┬───────────────────────────────────────────┘
+                   ▼ (pull failed or skipped)
+┌──────────────────────────────────────────────────────────────┐
+│ 5. Generate Dockerfile                                       │
 │    - FROM debian:bookworm-slim                               │
 │    - For each kit in resolved order:                         │
 │        COPY kit/<name>/ /tmp/kit-<name>/                     │
@@ -265,16 +279,26 @@ agentbox build [kit_list]
 └──────────────────┬───────────────────────────────────────────┘
                    ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ 5. Build                                                     │
+│ 6. Build                                                     │
 │    podman build -t <kit_image_tag> -f <generated> <ctx>      │
-│    Write cache metadata.                                     │
+│    Write cache metadata (source = "local").                  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 The generated Dockerfile is written to `~/.local/share/agentbox/cache/kits/<tag>.Dockerfile`
 for inspection. `agentbox build --print` outputs it to stdout instead of building.
+`agentbox build --print-tag` prints only the local tag without building (used by CI).
+`agentbox build --emit-context <dir>` stages the Dockerfile and kit directories to disk;
+CI uses this to hand the context to `docker buildx build --push` for multi-arch publishing.
+`agentbox build --no-pull` skips step 4 unconditionally.
 
-See `KITS.md` for the kit format spec.
+The eligibility check for the registry pull path is: all kits in the resolved list must
+have `Source == "builtin"`. A user kit at `~/.config/agentbox/kits/<name>/` (including
+one that shadows a built-in by name) disables the pull path for that kit list — user kit
+content cannot match a pre-published image.
+
+See `KITS.md` for the kit format spec. See `docs/features/registry-images.design.md` for
+the full registry design.
 
 ## Network architecture
 
@@ -563,8 +587,10 @@ left off.
 | Inner `docker run` fails with mount/permission error | `containers.enable` is false        | Set true and `agentbox run --fresh` |
 | Inner container can't reach the internet          | Outer network policy is too tight              | Adjust `network.allowlist.allow` or switch to `safe` |
 
-`agentbox doctor` checks the runtime, the kit cache, mount source existence, and DNS
-sidecar health. Run it when something's weird.
+`agentbox doctor` checks the runtime, the kit cache, mount source existence, DNS
+sidecar health, and registry reachability (`registry-reachable` — warn-only HEAD probe
+of the GHCR manifest endpoint; see SPEC.md "Open / deferred" for the known 401 limitation
+on the probe). Run it when something's weird.
 
 ## What's deliberately not architected
 

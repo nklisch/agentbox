@@ -98,7 +98,7 @@ updated to match (commit `15f9cf4`).
   `agentbox --runtime docker run` flow needs manual verification.
 - **macOS container-only volumes for big build dirs** (`node_modules`, `target`).
   Not implemented; deferred until perf is actually a problem on macOS.
-- **Kit image registry distribution** — first run is `build`, not `pull`. v0.3+.
+- ~~**Kit image registry distribution**~~ — shipped as v0.4.0. See Deviations section above.
 - **Worktree / auto-commit / sandbox-branch mode** — deferred indefinitely.
 - **Snapshot / resume** (`podman commit` + restart from snapshot) — deferred.
 - **ttyd in the kit for browser-based attach** — out of scope.
@@ -668,6 +668,52 @@ Implementation stats:
    documented `go install` path. Targets: linux/amd64, linux/arm64,
    darwin/arm64. The legacy `make install` flow is preserved for development.
    Homebrew tap and code signing remain deferred.
+
+### Kit-image registry distribution + kit-build robustness (v0.4.0, 2026-05-06)
+
+9. **Registry distribution + kit-build robustness shipped as v0.4.0.**
+
+   **Registry distribution** (commits `a2a4413` Group A consumer + `14990d5` Group B
+   producer + CI):
+
+   - New `[registry]` config block (`enabled`, `host`, `verify`, `pull_timeout`). Defaults:
+     `enabled = true`, host `ghcr.io/nklisch/agentbox-kits`, verify `"none"`, timeout `"5m"`.
+   - `agentbox build` and `agentbox run` gain a pull-then-fall-back-to-build path. Pull is
+     attempted when `[registry] enabled = true`, `--no-pull` not passed, and every kit in the
+     resolved list has `Source == "builtin"` (no user shadowing). Pull failures — `NotFound`,
+     `Auth`, `Network`, `Unknown` — are classified, surfaced to stderr as `[registry] ...`
+     lines, and always fall through to local build.
+   - After a successful pull, the remote ref is retagged as the canonical local tag
+     (`agentbox/<sha[:12]>`) and a cache entry with `source = "registry"` is written.
+     Subsequent runs short-circuit on the cache with no network call.
+   - New flags: `--no-pull` on `agentbox build` and `agentbox run`; `--emit-context <dir>`
+     on `agentbox build` (stages Dockerfile + kit dirs for CI); `--print-tag` on
+     `agentbox build` (prints local tag without building).
+   - Four pre-published multi-arch (`linux/amd64` + `linux/arm64`) kit-list images published
+     on every `v*` tag via `.github/workflows/kit-images.yml`. Catalog at
+     `.github/published-kits.yml`. GHCR public packages are free, unlimited storage and
+     bandwidth.
+   - New `registry-reachable` doctor check: warn-only HEAD probe of the GHCR manifest
+     endpoint. Known limitation: GHCR returns 401 to anonymous HEAD requests even for public
+     images — the check surfaces a spurious "auth required" warning on a working setup.
+     The actual pull path is unaffected (podman handles bearer-token negotiation). Tracked
+     under SPEC.md "Open / deferred".
+
+   **Kit-build robustness** (commit `6ff08cd`):
+
+   - `sccache` and `cargo-watch` now install from prebuilt GitHub-release binaries in both
+     `polyglot/install.sh` and `rust/install.sh`. The previous `cargo install` approach
+     OOM-killed on memory-constrained hosts (single-codegen-unit link peak of ~3-4 GB RSS)
+     and made CI's QEMU-emulated arm64 build of the polyglot kit effectively infeasible.
+     Both kits received the same fix because polyglot inlines rust's install logic.
+
+   **macOS test plumbing** (part of `a2a4413`):
+
+   - `internal/config/load.go` now honors `$XDG_CONFIG_HOME` on all platforms (previously
+     only Linux; `os.UserConfigDir` on darwin returns `~/Library/Application Support`).
+   - Test helpers in `internal/cli/cli_test.go` and `internal/lifecycle/lifecycle_test.go`
+     now call `filepath.EvalSymlinks` to match `project.Resolve()` behavior on macOS
+     (where `/tmp` is a symlink to `/private/tmp`). No user-facing impact.
 
 ### Layout system + agent-activity trail (v0.3.0, 2026-05-05)
 
