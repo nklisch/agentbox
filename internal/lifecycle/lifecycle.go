@@ -341,6 +341,35 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 		return exitcode.Wrap(exitcode.InvalidArgs, err)
 	}
 
+	// Resolve agent config to get the command for the layout.
+	agent := l.Cfg.DefaultAgent
+	if opts.Agent != "" {
+		agent = opts.Agent
+	}
+	a, ok := l.Cfg.Agents[agent]
+	if !ok {
+		return exitcode.New(exitcode.InvalidArgs, "agent %q not defined", agent)
+	}
+
+	// Write the layout BEFORE EnsureBox so the bind-mount source at
+	// <state>/layout.kdl has its final content at the moment podman create
+	// runs. Critical on macOS Podman, where the bind mount goes through the
+	// podman-machine VM's virtiofs: post-mount writes from the host do not
+	// reliably propagate to the guest (the guest can keep serving the empty
+	// file that EnsureSession touches in state/dir.go to make the mount
+	// source exist). On Linux, write-after-mount works fine; on macOS, zellij
+	// reads an empty or torn layout.kdl and panics with a parse error.
+	//
+	// project.Resolve gives us projID without needing the box back from
+	// EnsureBox first — same hash as createBox would compute internally.
+	projID, projAbs, perr := project.Resolve()
+	if perr != nil {
+		return exitcode.Wrap(exitcode.Generic, perr)
+	}
+	if err := writeLayoutFor(projID, projAbs, spec, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell, ""); err != nil {
+		return exitcode.Wrap(exitcode.Generic, err)
+	}
+
 	// Stash the resolved name so createBox (called from EnsureBox) can use it
 	// for the trail-wiring gate. Cleared after EnsureBox returns.
 	l.pendingLayoutName = spec.Name
@@ -352,18 +381,11 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 		return err
 	}
 
-	// Resolve agent config to get the command for the layout.
-	agent := l.Cfg.DefaultAgent
-	if opts.Agent != "" {
-		agent = opts.Agent
-	}
-	a, ok := l.Cfg.Agents[agent]
-	if !ok {
-		return exitcode.New(exitcode.InvalidArgs, "agent %q not defined", agent)
-	}
-
-	// Write the layout unconditionally so `agentbox attach .` can reconnect
-	// even when --no-attach was used to start the box.
+	// Re-write the layout after EnsureBox using box.CWD (defensive: Resolve
+	// returned the same projAbs, but if a future change makes them diverge,
+	// box.CWD is canonical for the existing container). This is also a
+	// refresh path for `agentbox attach .` reconnecting later — Linux still
+	// benefits from the rewrite if config changed since first create.
 	if err := writeLayoutFor(box.ProjectID, box.CWD, spec, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell, ""); err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
@@ -387,6 +409,20 @@ func (l *Lifecycle) Shell(opts RunOpts) error {
 	if opts.Network != "" {
 		l.Cfg.Network.Mode = opts.Network
 	}
+	// Same write-before-mount fix as Run: populate <state>/layout.kdl before
+	// EnsureBox triggers podman create so the bind mount captures real content
+	// instead of EnsureSession's empty placeholder. Matters on macOS Podman
+	// virtiofs; harmless on Linux. See the long comment in Run for details.
+	// Skip when --no-zellij since we won't launch zellij in that path.
+	if !opts.NoZellij {
+		projID, projAbs, perr := project.Resolve()
+		if perr != nil {
+			return exitcode.Wrap(exitcode.Generic, perr)
+		}
+		if err := writeLayout(projID, projAbs, zellij.ModeShell, nil, l.Cfg.Shell.Shell); err != nil {
+			return exitcode.Wrap(exitcode.Generic, err)
+		}
+	}
 	box, err := l.EnsureBox(EnsureOpts{Fresh: opts.Fresh})
 	if err != nil {
 		return err
@@ -399,6 +435,8 @@ func (l *Lifecycle) Shell(opts RunOpts) error {
 	if opts.NoZellij {
 		return l.shellInto(box)
 	}
+	// Refresh the layout post-create as well (Linux benefit, macOS no-op
+	// for already-mounted file). Keeps Shell symmetric with Run.
 	if err := writeLayout(box.ProjectID, box.CWD, zellij.ModeShell, nil, l.Cfg.Shell.Shell); err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
