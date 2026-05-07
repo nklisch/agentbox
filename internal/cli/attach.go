@@ -22,6 +22,7 @@ func newAttachCmd() *cobra.Command {
 			}
 			l.Stdout = cmd.OutOrStdout()
 			l.Stderr = cmd.ErrOrStderr()
+			l.Quiet = global.Quiet
 			return l.Attach(args[0])
 		},
 	}

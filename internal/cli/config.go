@@ -36,7 +36,6 @@ func newConfigCmd() *cobra.Command {
 }
 
 func newConfigShowCmd() *cobra.Command {
-	var effective bool
 	cmd := &cobra.Command{
 		Use:   "show",
 		Short: "Print the merged configuration",
@@ -46,11 +45,6 @@ func newConfigShowCmd() *cobra.Command {
 				return err
 			}
 			cfg := res.Config
-			// --effective applies the same global-flag overrides that
-			// loadConfig already applied, so for P1 there's nothing extra
-			// to do here. Future flags (network, kits) would apply here.
-			_ = effective
-
 			if global.JSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
@@ -59,7 +53,6 @@ func newConfigShowCmd() *cobra.Command {
 			return toml.NewEncoder(cmd.OutOrStdout()).Encode(cfg)
 		},
 	}
-	cmd.Flags().BoolVar(&effective, "effective", false, "include CLI-flag overrides as if a `run` were happening now")
 	return cmd
 }
 

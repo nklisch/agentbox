@@ -813,3 +813,302 @@ func TestDoctor_Fix_Flag_CallsFixes(t *testing.T) {
 	// The command may return a non-zero exit (doctor failures) — that's fine.
 	// We only care that --fix itself was accepted by cobra.
 }
+
+// ── Unit 4: --quiet wiring ────────────────────────────────────────────────────
+
+func TestRun_NoAttach_QuietSuppressesLivenessPrint(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	id := projectID(tmp)
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-"+id] = container.Box{
+		ProjectID: id,
+		CWD:       tmp,
+		Status:    container.StatusRunning,
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, stderr, err := runCmd(t, "run", "--no-attach", "-q")
+	if err != nil {
+		t.Fatalf("run --no-attach -q: %v", err)
+	}
+	if strings.Contains(out, "(running)") || strings.Contains(stderr, "(running)") {
+		t.Errorf("--quiet should suppress liveness print; stdout=%q stderr=%q", out, stderr)
+	}
+}
+
+func TestRun_NoAttach_NonQuietPrintsLiveness(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	id := projectID(tmp)
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-"+id] = container.Box{
+		ProjectID: id,
+		CWD:       tmp,
+		Status:    container.StatusRunning,
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, _, err := runCmd(t, "run", "--no-attach")
+	if err != nil {
+		t.Fatalf("run --no-attach: %v", err)
+	}
+	if !strings.Contains(out, "(running)") {
+		t.Errorf("without --quiet, liveness print should appear: %q", out)
+	}
+}
+
+func TestDoctor_QuietPrintsOnlyFails(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	// Without --quiet, we expect OK/WARN lines.
+	out, _, _ := runCmd(t, "doctor")
+	if !strings.Contains(out, "[OK]") && !strings.Contains(out, "[WARN]") && !strings.Contains(out, "[FAIL]") {
+		t.Skip("doctor produced no output (no checks?), skipping quiet suppression test")
+	}
+
+	// With --quiet, OK and WARN lines should be suppressed.
+	quietOut, _, _ := runCmd(t, "doctor", "-q")
+	if strings.Contains(quietOut, "[OK]") {
+		t.Errorf("--quiet doctor should not print OK lines, got:\n%s", quietOut)
+	}
+	if strings.Contains(quietOut, "[WARN]") {
+		t.Errorf("--quiet doctor should not print WARN lines, got:\n%s", quietOut)
+	}
+}
+
+func TestLs_QuietStillPrintsTable(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-abc123456789"] = container.Box{
+		ProjectID: "abc123456789",
+		Project:   "testproj",
+		Agent:     "claude",
+		Kits:      []string{"base"},
+		Status:    container.StatusRunning,
+		Created:   time.Now(),
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, _, err := runCmd(t, "ls", "--all", "-q")
+	if err != nil {
+		t.Fatalf("ls --all -q: %v", err)
+	}
+	// Table is the result, not chatter — must still appear with --quiet.
+	if !strings.Contains(out, "abc123456789") {
+		t.Errorf("--quiet ls should still show the table, got: %q", out)
+	}
+}
+
+// ── Unit 5: --detach-on-exit ──────────────────────────────────────────────────
+
+func TestRun_DetachOnExit_NoAttachIsRejected(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	rt := newFakeRuntime()
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	_, _, err := runCmd(t, "run", "--no-attach", "--detach-on-exit")
+	if err == nil {
+		t.Fatal("expected error for --no-attach + --detach-on-exit")
+	}
+	var ee *exitcode.Err
+	if !errors.As(err, &ee) {
+		t.Fatalf("expected *exitcode.Err, got %T", err)
+	}
+	if ee.Code != exitcode.InvalidArgs {
+		t.Errorf("expected InvalidArgs (%d), got %d", exitcode.InvalidArgs, ee.Code)
+	}
+}
+
+// ── Unit 6: --effective flag dropped ─────────────────────────────────────────
+
+func TestConfigShow_EffectiveFlagRejected(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	_, stderr, err := runCmd(t, "config", "show", "--effective")
+	if err == nil {
+		t.Fatal("expected error for unknown --effective flag")
+	}
+	// cobra prints "unknown flag: --effective" to stderr
+	if !strings.Contains(stderr, "effective") && !strings.Contains(err.Error(), "effective") {
+		t.Errorf("expected error about 'effective' flag, got err=%v stderr=%q", err, stderr)
+	}
+}
+
+// ── Unit 7: ls empty-state hint ──────────────────────────────────────────────
+
+func TestLs_EmptyPrintsHintToStderr(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime() // no boxes
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, stderr, err := runCmd(t, "ls")
+	if err != nil {
+		t.Fatalf("ls with no boxes: %v", err)
+	}
+	if out != "" {
+		t.Errorf("expected no stdout output when no boxes, got: %q", out)
+	}
+	if !strings.Contains(stderr, "no boxes") {
+		t.Errorf("expected 'no boxes' hint on stderr, got: %q", stderr)
+	}
+}
+
+func TestLs_EmptyJSONPrintsZeroLines(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime() // no boxes
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, _, err := runCmd(t, "ls", "--json")
+	if err != nil {
+		t.Fatalf("ls --json with no boxes: %v", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("expected zero stdout lines for --json with no boxes, got: %q", out)
+	}
+}
+
+func TestLs_EmptyQuietPrintsNothing(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime() // no boxes
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, stderr, err := runCmd(t, "ls", "-q")
+	if err != nil {
+		t.Fatalf("ls -q with no boxes: %v", err)
+	}
+	if out != "" {
+		t.Errorf("expected no stdout with -q and no boxes, got: %q", out)
+	}
+	if strings.Contains(stderr, "no boxes") {
+		t.Errorf("expected 'no boxes' suppressed by -q, got stderr: %q", stderr)
+	}
+}
+
+// ── Unit 8: rm success messages (CLI wiring check) ───────────────────────────
+
+func TestRm_OnePrintsRemovedToStderr(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-aaa000000000"] = container.Box{
+		ProjectID: "aaa000000000",
+		Status:    container.StatusRunning,
+		Role:      "box",
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	_, stderr, err := runCmd(t, "rm", "aaa000000000")
+	if err != nil {
+		t.Fatalf("rm aaa000000000: %v", err)
+	}
+	if !strings.Contains(stderr, "removed aaa000000000") {
+		t.Errorf("expected 'removed aaa000000000' on stderr, got: %q", stderr)
+	}
+}
+
+func TestRm_QuietSuppressesSuccessMessages(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-aaa000000000"] = container.Box{
+		ProjectID: "aaa000000000",
+		Status:    container.StatusRunning,
+		Role:      "box",
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, stderr, err := runCmd(t, "rm", "aaa000000000", "-q")
+	if err != nil {
+		t.Fatalf("rm aaa000000000 -q: %v", err)
+	}
+	if strings.Contains(out, "removed") || strings.Contains(stderr, "removed") {
+		t.Errorf("--quiet should suppress 'removed' message; stdout=%q stderr=%q", out, stderr)
+	}
+}
+
+// ── rm dry-run CLI wiring check ───────────────────────────────────────────────
+
+func TestRm_DryRun_CLI_PrintsShellToStdout(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	rt := newFakeRuntime()
+	rt.boxes["agentbox-aaa000000000"] = container.Box{
+		ProjectID: "aaa000000000",
+		Status:    container.StatusRunning,
+		Role:      "box",
+	}
+
+	restore := setupFakeLifecycle(t, rt)
+	defer restore()
+
+	out, _, err := runCmd(t, "rm", "aaa000000000", "--dry-run")
+	if err != nil {
+		t.Fatalf("rm --dry-run: %v", err)
+	}
+	if !strings.Contains(out, "podman rm") {
+		t.Errorf("expected 'podman rm' in dry-run stdout, got: %q", out)
+	}
+	// Box must still exist — not removed.
+	if _, ok := rt.boxes["agentbox-aaa000000000"]; !ok {
+		t.Error("box should still exist after dry-run")
+	}
+}

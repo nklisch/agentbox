@@ -61,6 +61,8 @@ var newLifecycle = func(cfg config.Config) (*lifecycle.Lifecycle, error) {
 			NetfilterBin: "agentbox-netfilter",
 		},
 		Home:   home,
+		Quiet:  global.Quiet,
+		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}, nil

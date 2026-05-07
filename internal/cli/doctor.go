@@ -43,6 +43,9 @@ func newDoctorCmd() *cobra.Command {
 				}
 			} else {
 				for _, c := range result.Checks {
+					if global.Quiet && c.Status != doctor.StatusFail {
+						continue
+					}
 					fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s — %s\n", c.Status, c.Name, c.Message)
 				}
 			}

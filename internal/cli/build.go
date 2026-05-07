@@ -31,6 +31,14 @@ func newBuildCmd() *cobra.Command {
 		Short: "Build (or rebuild) a composed kit image",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// --dry-run is mutually exclusive with introspection flags: those
+			// paths already serve as "show what would happen" and combining
+			// them with --dry-run would be ambiguous.
+			if global.DryRun && (listOnly || prune || printOnly || printTag || emitContext != "") {
+				return exitcode.New(exitcode.InvalidArgs,
+					"--dry-run cannot be combined with --list, --prune, --print, --print-tag, or --emit-context")
+			}
+
 			res, err := loadConfig()
 			if err != nil {
 				return err
@@ -178,6 +186,9 @@ func runBuildBuild(cmd *cobra.Command, b *kits.Builder, requested []string, noCa
 	if len(requested) == 0 {
 		return exitcode.New(exitcode.InvalidArgs, "no kits requested and default_kits is empty")
 	}
+	if global.DryRun {
+		return runBuildDryRun(cmd, b, requested, noCache, noPull)
+	}
 	res, err := b.Build(requested, kits.BuildOpts{
 		NoCache: noCache,
 		NoPull:  noPull,
@@ -188,13 +199,13 @@ func runBuildBuild(cmd *cobra.Command, b *kits.Builder, requested []string, noCa
 		return exitcode.Wrap(exitcode.KitBuild, err)
 	}
 	if res.CacheHit {
-		fmt.Fprintf(cmd.OutOrStdout(), "cache hit: %s (kits: %s)\n", res.Tag, strings.Join(res.Kits, ","))
+		info(cmd, "cache hit: %s (kits: %s)", res.Tag, strings.Join(res.Kits, ","))
 		return nil
 	}
 	if res.PullHit {
-		fmt.Fprintf(cmd.OutOrStdout(), "pulled: %s (kits: %s)\n", res.Tag, strings.Join(res.Kits, ","))
+		info(cmd, "pulled: %s (kits: %s)", res.Tag, strings.Join(res.Kits, ","))
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "built: %s (kits: %s)\n", res.Tag, strings.Join(res.Kits, ","))
+	info(cmd, "built: %s (kits: %s)", res.Tag, strings.Join(res.Kits, ","))
 	return nil
 }

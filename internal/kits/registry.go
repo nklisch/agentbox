@@ -100,6 +100,22 @@ func AllBuiltin(res Resolved) bool {
 	return true
 }
 
+// PullEligible reports whether a resolved kit list is eligible for a registry
+// pull. It mirrors the eligibility predicate in Builder.Build so the dry-run
+// path and the live path stay aligned without duplicating the logic.
+//
+// Eligible when:
+//   - b.RegistryEnabled is true
+//   - b.RegistryHost is non-empty
+//   - noPull is false
+//   - every kit in res comes from the built-in registry (AllBuiltin)
+//
+// Note: the live path also gates on !opts.NoCache; we omit that here because
+// dry-run doesn't involve caching. The intent is "would live build try to pull?"
+func PullEligible(b *Builder, res Resolved, noPull bool) bool {
+	return b.RegistryEnabled && b.RegistryHost != "" && !noPull && AllBuiltin(res)
+}
+
 // Describe returns name + description + source for every known kit, in
 // alphabetical order. Used by `agentbox build --list`.
 func (r *Registry) Describe() ([]KitInfo, error) {

@@ -28,7 +28,8 @@ func newRmCmd() *cobra.Command {
 			}
 			l.Stdout = cmd.OutOrStdout()
 			l.Stderr = cmd.ErrOrStderr()
-			opts := lifecycle.RmOpts{All: all, Force: force, KeepState: keepState}
+			l.Quiet = global.Quiet
+			opts := lifecycle.RmOpts{All: all, Force: force, KeepState: keepState, DryRun: global.DryRun}
 			if len(args) == 1 {
 				opts.Input = args[0]
 			}
@@ -36,7 +37,7 @@ func newRmCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "remove every agentbox box")
-	cmd.Flags().BoolVar(&force, "force", false, "skip confirmation when using --all")
+	cmd.Flags().BoolVar(&force, "force", false, "skip the y/N confirmation prompt when using --all")
 	cmd.Flags().BoolVar(&keepState, "keep-state", false, "remove container but keep session state dir")
 	return cmd
 }

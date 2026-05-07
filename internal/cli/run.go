@@ -52,13 +52,20 @@ func newRunCmd() *cobra.Command {
 			// Redirect lifecycle output through cobra's writer so tests can capture it.
 			l.Stdout = cmd.OutOrStdout()
 			l.Stderr = cmd.ErrOrStderr()
+			l.Quiet = global.Quiet
 
+			if noAttach && detachOnExit {
+				return exitcode.New(exitcode.InvalidArgs,
+					"--no-attach and --detach-on-exit are mutually exclusive: "+
+						"--detach-on-exit requires an interactive session to detach from")
+			}
 			opts := lifecycle.RunOpts{
-				Fresh:   fresh,
-				NoPull:  noPull,
-				Attach:  !noAttach,
-				Network: networkFlag,
-				Layout:  layoutFlag,
+				Fresh:        fresh,
+				NoPull:       noPull,
+				Attach:       !noAttach,
+				Network:      networkFlag,
+				Layout:       layoutFlag,
+				DetachOnExit: detachOnExit,
 			}
 			if len(args) == 1 {
 				opts.Agent = args[0]
@@ -66,7 +73,6 @@ func newRunCmd() *cobra.Command {
 			if kitsFlag != "" {
 				opts.Kits = strings.Split(kitsFlag, ",")
 			}
-			_ = detachOnExit // P3 doesn't auto-stop on exit; future phase.
 			return l.Run(opts)
 		},
 	}
@@ -77,7 +83,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&layoutFlag, "layout", "",
 		"zellij layout name (focus|reviewer|auditor|<custom>); overrides [zellij].layout config")
 	cmd.Flags().BoolVar(&noAttach, "no-attach", false, "create/start the box but don't attach")
-	cmd.Flags().BoolVar(&detachOnExit, "detach-on-exit", false, "stop the container when the agent process exits")
+	cmd.Flags().BoolVar(&detachOnExit, "detach-on-exit", false, "stop the container when this session ends (default: keep running for `agentbox attach`)")
 	return cmd
 }
 

@@ -34,6 +34,7 @@ func newLsCmd() *cobra.Command {
 			}
 			l.Stdout = cmd.OutOrStdout()
 			l.Stderr = cmd.ErrOrStderr()
+			l.Quiet = global.Quiet
 			boxes, err := l.Ls(lifecycle.LsFilter{
 				All:     all,
 				Project: project,
@@ -50,6 +51,10 @@ func newLsCmd() *cobra.Command {
 						return exitcode.Wrap(exitcode.Generic, err)
 					}
 				}
+				return nil
+			}
+			if len(boxes) == 0 {
+				info(cmd, "no boxes")
 				return nil
 			}
 			return printLsTable(cmd.OutOrStdout(), boxes)

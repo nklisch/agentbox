@@ -27,6 +27,7 @@ func newShellCmd() *cobra.Command {
 			}
 			l.Stdout = cmd.OutOrStdout()
 			l.Stderr = cmd.ErrOrStderr()
+			l.Quiet = global.Quiet
 			return l.Shell(lifecycle.RunOpts{
 				Fresh:    fresh,
 				Attach:   true,

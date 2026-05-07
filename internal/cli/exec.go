@@ -71,6 +71,7 @@ func newExecCmd() *cobra.Command {
 			}
 			l.Stdout = cmd.OutOrStdout()
 			l.Stderr = cmd.ErrOrStderr()
+			l.Quiet = global.Quiet
 			return l.Exec(lifecycle.ExecOpts{
 				Input:       positional[0],
 				Argv:        positional[1:],

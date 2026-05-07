@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -42,8 +43,10 @@ type Lifecycle struct {
 	Builder *kits.Builder
 	Network NetworkManager // nil means no-op (off/open modes work without it)
 	Home    string
+	Stdin   io.Reader // nil disables interactive prompts (e.g. rm --all confirmation)
 	Stdout  io.Writer
 	Stderr  io.Writer
+	Quiet   bool // suppress informational stdout/stderr writes; errors and prompts are unaffected
 
 	// pendingLayoutName is set by Run before EnsureBox so createBox can consult
 	// the resolved layout name when deciding whether to wire trail mounts.
@@ -187,6 +190,28 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 		in.TrailHostPath = trailPath
 		in.ClaudeSettingsHostPath = settingsPath
 	}
+
+	// Resolve external symlink targets inside ~/.claude (e.g. global
+	// skills/plugins symlinked in from outside). For each, we'll bind-mount
+	// the resolved target at its same host path inside the box so the
+	// symlink (preserved by the parent ~/.claude bind-mount) resolves to a
+	// real path. This keeps host↔box live sync — the parent dir is still
+	// bind-mounted rw, and the symlink targets are bind-mounted rw too.
+	if agent == "claude" && l.Home != "" {
+		if cfgSrc, ok := l.Cfg.Mounts.AgentConfigs[agent]; ok && cfgSrc != "" {
+			claudeDir := cfgSrc
+			if strings.HasPrefix(claudeDir, "~/") {
+				claudeDir = filepath.Join(l.Home, claudeDir[2:])
+			} else if claudeDir == "~" {
+				claudeDir = l.Home
+			}
+			targets, err := CollectExternalSymlinkTargets(claudeDir)
+			if err != nil {
+				fmt.Fprintf(l.Stderr, "warning: scan %s for external symlinks: %v\n", claudeDir, err)
+			}
+			in.ExtraSamePathMounts = append(in.ExtraSamePathMounts, targets...)
+		}
+	}
 	args, err := runspec.BuildPodmanCreateArgs(l.Cfg, in)
 	if err != nil {
 		return container.Box{}, exitcode.Wrap(exitcode.Generic, err)
@@ -306,14 +331,15 @@ func SetStdinIsTerminal(fn func() bool) func() {
 
 // RunOpts controls the Run command.
 type RunOpts struct {
-	Agent    string
-	Kits     []string
-	Fresh    bool
-	Attach   bool
-	Network  string // override Cfg.Network.Mode for this run
-	NoZellij bool   // skip zellij and use bare-shell exec (only meaningful for Shell)
-	Layout   string // --layout flag value; empty falls back to cfg.Zellij.Layout
-	NoPull   bool   // skip the registry pull attempt; build locally
+	Agent        string
+	Kits         []string
+	Fresh        bool
+	Attach       bool
+	Network      string // override Cfg.Network.Mode for this run
+	NoZellij     bool   // skip zellij and use bare-shell exec (only meaningful for Shell)
+	Layout       string // --layout flag value; empty falls back to cfg.Zellij.Layout
+	NoPull       bool   // skip the registry pull attempt; build locally
+	DetachOnExit bool   // stop the container after the user's session ends
 }
 
 // Run is the high-level run command. Always writes the ModeRun layout so
@@ -391,15 +417,25 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 	}
 
 	if !opts.Attach {
-		fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
+		if !l.Quiet {
+			fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
+		}
 		return nil
 	}
 	if !stdinIsTerminal() {
 		// Zellij needs a real TTY; fall back to liveness print.
-		fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
+		if !l.Quiet {
+			fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
+		}
 		return nil
 	}
-	return l.zellijAttach(box)
+	err = l.zellijAttach(box)
+	if opts.DetachOnExit {
+		if stopErr := l.Runtime.Stop(container.ContainerName(box.ProjectID)); stopErr != nil {
+			fmt.Fprintf(l.Stderr, "warning: --detach-on-exit: stop container: %v\n", stopErr)
+		}
+	}
+	return err
 }
 
 // Shell opens an interactive session in the box. With a TTY and no --no-zellij
@@ -429,7 +465,9 @@ func (l *Lifecycle) Shell(opts RunOpts) error {
 	}
 	if !stdinIsTerminal() {
 		// Both zellij and bare shell need a TTY for interactivity.
-		fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
+		if !l.Quiet {
+			fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
+		}
 		return nil
 	}
 	if opts.NoZellij {
@@ -569,7 +607,9 @@ func (l *Lifecycle) Attach(input string) error {
 	}
 	if !stdinIsTerminal() {
 		// Liveness check — exit clean without blocking.
-		fmt.Fprintf(l.Stdout, "%s (running)\n", box.ProjectID)
+		if !l.Quiet {
+			fmt.Fprintf(l.Stdout, "%s (running)\n", box.ProjectID)
+		}
 		return nil
 	}
 	// Regenerate the layout only when the file is empty or missing (e.g. if the
@@ -632,10 +672,14 @@ type RmOpts struct {
 	All       bool
 	Force     bool
 	KeepState bool
+	DryRun    bool // print equivalent shell commands; do not execute
 }
 
 // Rm removes a box and its session state.
 func (l *Lifecycle) Rm(opts RmOpts) error {
+	if opts.DryRun {
+		return l.rmDryRun(opts)
+	}
 	if opts.All {
 		return l.rmAll(opts.Force, opts.KeepState)
 	}
@@ -648,6 +692,51 @@ func (l *Lifecycle) Rm(opts RmOpts) error {
 		return err
 	}
 	return l.rmOne(projID, opts.KeepState)
+}
+
+// rmDryRun enumerates the target boxes and renders the equivalent shell
+// commands to l.Stdout without executing anything.
+func (l *Lifecycle) rmDryRun(opts RmOpts) error {
+	var targets []container.Box
+	if opts.All {
+		boxes, err := l.Runtime.Ls(true) // include stopped
+		if err != nil {
+			return exitcode.Wrap(exitcode.Generic, err)
+		}
+		for _, b := range boxes {
+			if b.Role == "" || b.Role == "box" {
+				targets = append(targets, b)
+			}
+		}
+	} else {
+		if opts.Input == "" {
+			return exitcode.New(exitcode.InvalidArgs,
+				"agentbox rm requires <project_id> or --all")
+		}
+		projID, err := l.ResolveID(opts.Input)
+		if err != nil {
+			return err
+		}
+		name := container.ContainerName(projID)
+		box, err := l.Runtime.Inspect(name)
+		if err != nil {
+			return exitcode.Wrap(exitcode.Generic, err)
+		}
+		box.ProjectID = projID
+		targets = append(targets, box)
+	}
+
+	for _, b := range targets {
+		var netSpec *network.Spec
+		if l.Network != nil {
+			spec := l.Network.SpecFor(l.Cfg, b.ProjectID)
+			netSpec = &spec
+		}
+		if err := renderRmShell(l.Stdout, l.Cfg, b.ProjectID, b, opts.KeepState, netSpec); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (l *Lifecycle) rmOne(projID string, keepState bool) error {
@@ -669,6 +758,9 @@ func (l *Lifecycle) rmOne(projID string, keepState bool) error {
 			return exitcode.Wrap(exitcode.Generic, err)
 		}
 	}
+	if !l.Quiet {
+		fmt.Fprintf(l.Stderr, "removed %s\n", projID)
+	}
 	return nil
 }
 
@@ -685,17 +777,60 @@ func (l *Lifecycle) rmAll(force, keepState bool) error {
 			userBoxes = append(userBoxes, b)
 		}
 	}
-	if !force && len(userBoxes) > 0 {
-		return exitcode.New(exitcode.InvalidArgs,
-			"would remove %d box(es); pass --force to skip confirmation", len(userBoxes))
+	if len(userBoxes) == 0 {
+		return nil
 	}
-	var firstErr error
-	for _, b := range userBoxes {
-		if err := l.rmOne(b.ProjectID, keepState); err != nil && firstErr == nil {
-			firstErr = err
+	if !force {
+		ok, err := l.confirmRmAll(len(userBoxes))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if !l.Quiet {
+				fmt.Fprintln(l.Stderr, "aborted")
+			}
+			return nil
 		}
 	}
+	var firstErr error
+	removed := 0
+	for _, b := range userBoxes {
+		if err := l.rmOne(b.ProjectID, keepState); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		removed++
+	}
+	if !l.Quiet && removed > 0 {
+		fmt.Fprintf(l.Stderr, "removed %d box(es)\n", removed)
+	}
 	return firstErr
+}
+
+// confirmRmAll prompts the user on stdin for a y/N confirmation. Returns
+// (true, nil) if the user typed yes, (false, nil) if they declined.
+//
+// When stdin isn't a TTY (scripts, CI, redirected input), the prompt is
+// skipped and we return an InvalidArgs error directing the caller to pass
+// --force. This is deliberate: silently auto-confirming on non-TTY would
+// be unsafe for scripted callers, and silently auto-aborting would surprise
+// users who pipe input intending to confirm. Forcing the explicit --force
+// flag for non-interactive use keeps the contract clear.
+func (l *Lifecycle) confirmRmAll(n int) (bool, error) {
+	if l.Stdin == nil || !stdinIsTerminal() {
+		return false, exitcode.New(exitcode.InvalidArgs,
+			"would remove %d box(es); pass --force to skip confirmation (stdin is not a terminal)", n)
+	}
+	fmt.Fprintf(l.Stderr, "Remove %d agentbox box(es) and their session state? [y/N]: ", n)
+	reader := bufio.NewReader(l.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, exitcode.Wrap(exitcode.Generic, fmt.Errorf("read confirmation: %w", err))
+	}
+	ans := strings.TrimSpace(strings.ToLower(line))
+	return ans == "y" || ans == "yes", nil
 }
 
 func contains(haystack []string, needle string) bool {

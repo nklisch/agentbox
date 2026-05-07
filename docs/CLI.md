@@ -42,7 +42,7 @@ Available on every command:
 | `--runtime <name>`    | from config   | `podman` or `docker`. Overrides config.                |
 | `--dry-run`           | false         | Print the equivalent shell commands; do not execute.   |
 | `--json`              | false         | Machine-readable output where supported.               |
-| `--quiet, -q`         | false         | Suppress non-error output.                             |
+| `--quiet, -q`         | false         | Suppress informational messages. Errors and primary output (table/JSON/dry-run shell) are not affected. |
 | `--verbose, -v`       | false         | Verbose logging to stderr.                             |
 | `--help, -h`          |               | Show help for this command.                            |
 | `--version`           |               | Print agentbox version and exit.                       |
@@ -82,7 +82,7 @@ agentbox run [agent] [flags]
 | `--layout <name>`   | Zellij layout to use: `focus` (default), `reviewer`, `auditor`, or a custom name. Overrides `[zellij].layout` config. Exit code 2 if the name is not a built-in and no file exists at `~/.config/agentbox/layouts/<name>.kdl`. See [docs/LAYOUTS.md](LAYOUTS.md). |
 | `--no-attach`       | Create/start the box but don't attach (for scripting).      |
 | `--no-pull`         | Skip the registry pull attempt; build locally. Useful when iterating on a custom kit or when you want to force a clean local build. Threaded through to the builder via `lifecycle.RunOpts.NoPull`. |
-| `--detach-on-exit`  | Stop the container when the agent process exits (default: keep running). |
+| `--detach-on-exit`  | Stop the container when this session ends (default: keep running for `agentbox attach`). |
 
 **Behavior:** see ARCHITECTURE.md "agentbox run lifecycle." TL;DR: ensures a per-project
 box is up, then `podman exec`s into it and runs `zellij attach -c agentbox` with a
@@ -127,9 +127,10 @@ agent running.
 
 **Flags:**
 
-| Flag      | Behavior                                                      |
-| --------- | ------------------------------------------------------------- |
-| `--no-zellij` | Skip zellij entirely. Just `podman exec -it ... <shell>`. |
+| Flag          | Behavior                                                      |
+| ------------- | ------------------------------------------------------------- |
+| `--fresh`     | Remove any existing box for this project before creating.     |
+| `--no-zellij` | Skip zellij entirely. Just `podman exec -it ... <shell>`.     |
 
 ### `agentbox attach`
 
@@ -224,7 +225,7 @@ agentbox rm --all
 | Flag        | Behavior                                                              |
 | ----------- | --------------------------------------------------------------------- |
 | `--all`     | Remove every container with `agentbox=1` label. Required if no `<project_id>`. |
-| `--force`   | Don't prompt for confirmation when using `--all`.                     |
+| `--force`   | Skip the y/N confirmation prompt when using `--all`. Required when stdin is not a TTY. |
 | `--keep-state` | Remove container but keep `~/.local/share/agentbox/sessions/<id>/`. |
 
 **Behavior:**
@@ -237,6 +238,14 @@ agentbox rm --all
 
 Refuses to run with no arguments and no `--all` (exit code 2). This is intentional — `rm`
 defaulting to "current project" felt too loaded.
+
+**Examples:**
+
+```sh
+agentbox rm .                           # remove box for current project
+agentbox rm --all --force               # remove all boxes without prompting
+agentbox rm --all --dry-run             # print the podman commands without running them
+```
 
 ### `agentbox build`
 
@@ -280,6 +289,7 @@ User kits — including user kits that shadow a built-in by name — disable the
 agentbox build                            # build default_kits (pulls from registry if eligible)
 agentbox build polyglot,cloud,claude
 agentbox build polyglot,claude --no-pull  # skip registry; build locally
+agentbox build polyglot,claude --dry-run  # print podman pull/build commands without running them
 agentbox build --print polyglot,go        # inspect the generated Dockerfile
 agentbox build --print-tag polyglot,claude  # print agentbox/<sha> without building
 agentbox build --emit-context /tmp/ctx polyglot,claude  # stage context for docker buildx
@@ -352,7 +362,7 @@ a copy-pasteable line for the current system. Examples:
 Inspect or edit configuration.
 
 ```
-agentbox config show [--effective] [--json]
+agentbox config show [--json]
 agentbox config edit [--global | --project]
 agentbox config path [--global | --project]
 ```
@@ -361,7 +371,7 @@ agentbox config path [--global | --project]
 
 | Subcommand | Behavior                                                              |
 | ---------- | --------------------------------------------------------------------- |
-| `show`     | Print the merged configuration. With `--effective`, includes CLI-flag overrides as if a `run` were happening now. |
+| `show`     | Print the merged configuration. Reflects `--runtime` and `--config` global flag overrides. |
 | `edit`     | Open `$EDITOR` on the config file. `--global` (default) or `--project`. Creates the file if missing. |
 | `path`     | Print the file path and exit.                                         |
 

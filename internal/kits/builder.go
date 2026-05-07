@@ -119,6 +119,15 @@ type Builder struct {
 	PullTimeout     time.Duration // 0 = no timeout
 }
 
+// Resolve resolves the requested kit list using the builder's registry and
+// returns the resolved kit set with its canonical image tag. This is the
+// same resolution step that Build performs internally. Provided as a
+// convenience so callers (e.g. dry-run) can inspect the resolved set without
+// triggering a build.
+func (b *Builder) Resolve(requested []string) (Resolved, error) {
+	return Resolve(b.Registry, requested)
+}
+
 // PrintDockerfile resolves the kit list and returns the Dockerfile string
 // without staging a build context or calling the runner.
 func (b *Builder) PrintDockerfile(requested []string) (string, error) {

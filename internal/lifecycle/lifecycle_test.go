@@ -874,7 +874,9 @@ func TestRm_KeepStateSkipsRemoveSession(t *testing.T) {
 	}
 }
 
-func TestRm_AllRequiresForce(t *testing.T) {
+// Without a TTY (and without --force), rm --all errors out so scripts can't
+// silently delete everything. The error tells the user to pass --force.
+func TestRm_AllNoTTYRequiresForce(t *testing.T) {
 	rt := newFakeRuntime()
 	cfg := defaultTestCfg()
 
@@ -884,9 +886,10 @@ func TestRm_AllRequiresForce(t *testing.T) {
 	}
 
 	l := newTestLifecycle(t, rt, cfg, nil)
+	// l.Stdin is nil → confirmRmAll treats as "not a terminal".
 	err := l.Rm(lifecycle.RmOpts{All: true, Force: false})
 	if err == nil {
-		t.Fatal("expected error for --all without --force")
+		t.Fatal("expected error for --all without --force when stdin is not a TTY")
 	}
 	var ee *exitcode.Err
 	if !errors.As(err, &ee) {
@@ -894,6 +897,96 @@ func TestRm_AllRequiresForce(t *testing.T) {
 	}
 	if ee.Code != exitcode.InvalidArgs {
 		t.Errorf("expected InvalidArgs (%d), got %d", exitcode.InvalidArgs, ee.Code)
+	}
+}
+
+// With a TTY and the user typing "y\n", rm --all proceeds without --force.
+func TestRm_AllPromptYesProceeds(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	isolateState(t)
+
+	rt.boxes["agentbox-aaa000000000"] = container.Box{ProjectID: "aaa000000000", Status: container.StatusRunning}
+	rt.boxes["agentbox-bbb000000000"] = container.Box{ProjectID: "bbb000000000", Status: container.StatusStopped}
+
+	restore := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restore()
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+	l.Stdin = strings.NewReader("y\n")
+	stderr := &bytes.Buffer{}
+	l.Stderr = stderr
+
+	if err := l.Rm(lifecycle.RmOpts{All: true, Force: false}); err != nil {
+		t.Fatalf("Rm --all with y prompt: %v", err)
+	}
+	if len(rt.boxes) != 0 {
+		t.Errorf("expected all boxes removed, got %d remaining", len(rt.boxes))
+	}
+	if !strings.Contains(stderr.String(), "Remove 2 agentbox box(es)") {
+		t.Errorf("expected confirmation prompt in stderr, got %q", stderr.String())
+	}
+}
+
+// With a TTY and the user typing "n\n" (or anything other than y/yes),
+// rm --all aborts cleanly — no error, nothing removed.
+func TestRm_AllPromptNoAborts(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	isolateState(t)
+
+	rt.boxes["agentbox-aaa000000000"] = container.Box{ProjectID: "aaa000000000", Status: container.StatusRunning}
+
+	restore := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restore()
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+	l.Stdin = strings.NewReader("n\n")
+	stderr := &bytes.Buffer{}
+	l.Stderr = stderr
+
+	if err := l.Rm(lifecycle.RmOpts{All: true, Force: false}); err != nil {
+		t.Fatalf("Rm --all with n prompt should not error: %v", err)
+	}
+	if len(rt.boxes) != 1 {
+		t.Errorf("expected boxes preserved when user declines, got %d remaining", len(rt.boxes))
+	}
+	if !strings.Contains(stderr.String(), "aborted") {
+		t.Errorf("expected 'aborted' in stderr, got %q", stderr.String())
+	}
+}
+
+// Empty input (just enter) is treated as N — abort.
+func TestRm_AllPromptEmptyInputAborts(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	isolateState(t)
+
+	rt.boxes["agentbox-aaa000000000"] = container.Box{ProjectID: "aaa000000000", Status: container.StatusRunning}
+
+	restore := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restore()
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+	l.Stdin = strings.NewReader("\n")
+	l.Stderr = &bytes.Buffer{}
+
+	if err := l.Rm(lifecycle.RmOpts{All: true, Force: false}); err != nil {
+		t.Fatalf("Rm --all with empty prompt should not error: %v", err)
+	}
+	if len(rt.boxes) != 1 {
+		t.Errorf("empty input should be treated as no, got %d boxes remaining", len(rt.boxes))
+	}
+}
+
+// With no boxes at all, rm --all is a clean no-op (no prompt, no error).
+func TestRm_AllNoBoxesNoOp(t *testing.T) {
+	rt := newFakeRuntime() // no boxes
+	cfg := defaultTestCfg()
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+	if err := l.Rm(lifecycle.RmOpts{All: true, Force: false}); err != nil {
+		t.Errorf("rm --all on empty runtime should be a no-op, got: %v", err)
 	}
 }
 
@@ -1207,6 +1300,103 @@ func TestRun_AuditorNonClaude_NoTrailMount(t *testing.T) {
 	}
 }
 
+// ---- Claude home: external-symlink target overlay mounts ----
+
+// Symlinks under ~/.claude/skills/ pointing OUTSIDE ~/.claude (the way users
+// hook in global skill repos like ~/.agents/skills/) need their targets
+// bind-mounted at the same host path inside the box, otherwise the symlink
+// (preserved by the parent ~/.claude:/root/.claude bind-mount) dangles.
+func TestRun_ClaudeAgent_BindMountsExternalSymlinkTargets(t *testing.T) {
+	cr := newCaptureRuntime()
+	cfg := defaultTestCfg()
+	cfg.Mounts.AgentConfigs = map[string]string{"claude": "~/.claude"}
+	setupProject(t)
+
+	l := newCaptureLifecycle(t, cr, cfg)
+	// Create an external skill repo and symlink it from ~/.claude/skills/.
+	externalRoot := t.TempDir()
+	externalSkill := filepath.Join(externalRoot, "skilltap")
+	if err := os.MkdirAll(externalSkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(l.Home, ".claude", "skills"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalSkill, filepath.Join(l.Home, ".claude", "skills", "skilltap")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.Run(lifecycle.RunOpts{Attach: false, Agent: "claude"}); err != nil {
+		t.Fatalf("Run(claude): %v", err)
+	}
+
+	// Parent ~/.claude mount still points at the host dir (live sync).
+	var claudeMount runspec.Mount
+	for _, m := range cr.lastCreate.Mounts {
+		if m.Target == "/root/.claude" {
+			claudeMount = m
+			break
+		}
+	}
+	if claudeMount.Source == "" {
+		t.Fatalf("/root/.claude mount missing")
+	}
+	if claudeMount.Source != filepath.Join(l.Home, ".claude") {
+		t.Errorf("/root/.claude source = %q, want host ~/.claude (live mount)", claudeMount.Source)
+	}
+
+	// Same-path mount of the resolved external skill target must be present
+	// so the symlink resolves inside the box.
+	wantTarget, _ := filepath.EvalSymlinks(externalSkill)
+	if wantTarget == "" {
+		wantTarget = externalSkill
+	}
+	var found bool
+	for _, m := range cr.lastCreate.Mounts {
+		if m.Source == wantTarget && m.Target == wantTarget && m.Mode == "rw" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected same-path rw mount for resolved skill target %q, mounts: %+v",
+			wantTarget, cr.lastCreate.Mounts)
+	}
+}
+
+// Non-claude agents don't get the symlink-target scan — only ~/.claude is
+// scanned (skills/plugins are a Claude Code concept).
+func TestRun_NonClaudeAgent_NoSymlinkScan(t *testing.T) {
+	cr := newCaptureRuntime()
+	cfg := defaultTestCfg()
+	cfg.Agents["codex"] = config.Agent{Kits: []string{"base"}}
+	cfg.Mounts.AgentConfigs = map[string]string{"codex": "~/.codex"}
+	setupProject(t)
+
+	l := newCaptureLifecycle(t, cr, cfg)
+	// Set up a symlink under ~/.codex pointing outside; it should be IGNORED
+	// because the symlink scan is gated to the claude agent.
+	externalRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(externalRoot, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(l.Home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(externalRoot, "x"), filepath.Join(l.Home, ".codex", "x")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.Run(lifecycle.RunOpts{Attach: false, Agent: "codex"}); err != nil {
+		t.Fatalf("Run(codex): %v", err)
+	}
+	for _, m := range cr.lastCreate.Mounts {
+		if strings.Contains(m.Source, externalRoot) {
+			t.Errorf("codex agent should not trigger symlink scan, got mount: %+v", m)
+		}
+	}
+}
+
 // ---- Phase 7: containers seccomp wiring tests ----
 
 func TestEnsureBox_ContainersEnable_WritesSeccompProfile(t *testing.T) {
@@ -1250,5 +1440,198 @@ func TestEnsureBox_ContainersDisable_NoSeccompProfile(t *testing.T) {
 	seccompPath := filepath.Join(dataHome, "agentbox", "seccomp", "containers.json")
 	if _, err := os.Stat(seccompPath); err == nil {
 		t.Errorf("seccomp profile should not exist when Containers.Enable=false, but found at %s", seccompPath)
+	}
+}
+
+// ── Unit 5: DetachOnExit ─────────────────────────────────────────────────────
+
+func TestRun_DetachOnExit_StopsContainer(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	setupProject(t)
+
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		return 0, nil
+	}
+
+	restoreTTY := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restoreTTY()
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+	err := l.Run(lifecycle.RunOpts{Attach: true, DetachOnExit: true})
+	if err != nil {
+		t.Fatalf("Run(DetachOnExit): %v", err)
+	}
+	if !containsCall(rt.calls, "Stop") {
+		t.Error("expected runtime.Stop to be called when DetachOnExit=true")
+	}
+}
+
+func TestRun_NoDetachOnExit_DoesNotStop(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	setupProject(t)
+
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		return 0, nil
+	}
+
+	restoreTTY := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restoreTTY()
+
+	l := newTestLifecycle(t, rt, cfg, nil)
+	err := l.Run(lifecycle.RunOpts{Attach: true, DetachOnExit: false})
+	if err != nil {
+		t.Fatalf("Run(no DetachOnExit): %v", err)
+	}
+	if containsCall(rt.calls, "Stop") {
+		t.Error("Stop should NOT be called when DetachOnExit=false")
+	}
+}
+
+func TestRun_DetachOnExit_StopFailureLogsWarning(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	setupProject(t)
+
+	rt.execStub = func(name string, opts container.ExecOpts) (int, error) {
+		return 0, nil
+	}
+	rt.failOn["Stop"] = errors.New("stop failed: container busy")
+
+	restoreTTY := lifecycle.SetStdinIsTerminal(func() bool { return true })
+	defer restoreTTY()
+
+	var stderr bytes.Buffer
+	l := newTestLifecycle(t, rt, cfg, nil)
+	l.Stderr = &stderr
+
+	// Stop failure should NOT change the exit code.
+	err := l.Run(lifecycle.RunOpts{Attach: true, DetachOnExit: true})
+	if err != nil {
+		t.Fatalf("Run with DetachOnExit stop failure should return nil (zellij exited cleanly): %v", err)
+	}
+	if !strings.Contains(stderr.String(), "warning") {
+		t.Errorf("expected warning on stderr for stop failure, got: %q", stderr.String())
+	}
+}
+
+// ── Unit 8: rm success messages ──────────────────────────────────────────────
+
+func TestRm_OnePrintsRemoved(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+
+	isolateState(t)
+	projID, projAbs := setupProject(t)
+	name := "agentbox-" + projID
+	rt.boxes[name] = container.Box{
+		ProjectID: projID,
+		CWD:       projAbs,
+		Status:    container.StatusRunning,
+	}
+
+	var stderr bytes.Buffer
+	l := &lifecycle.Lifecycle{
+		Cfg:     cfg,
+		Runtime: rt,
+		Home:    t.TempDir(),
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &stderr,
+	}
+	if err := l.Rm(lifecycle.RmOpts{Input: "."}); err != nil {
+		t.Fatalf("Rm: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "removed "+projID) {
+		t.Errorf("expected 'removed %s' on stderr, got: %q", projID, stderr.String())
+	}
+}
+
+func TestRm_AllPrintsPerBoxAndSummary(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	isolateState(t)
+
+	rt.boxes["agentbox-aaa000000000"] = container.Box{ProjectID: "aaa000000000", Status: container.StatusRunning}
+	rt.boxes["agentbox-bbb000000000"] = container.Box{ProjectID: "bbb000000000", Status: container.StatusStopped}
+
+	var stderr bytes.Buffer
+	l := newTestLifecycle(t, rt, cfg, nil)
+	l.Stderr = &stderr
+
+	if err := l.Rm(lifecycle.RmOpts{All: true, Force: true}); err != nil {
+		t.Fatalf("Rm --all --force: %v", err)
+	}
+	got := stderr.String()
+	// Each box must have its own "removed" line.
+	if !strings.Contains(got, "removed aaa000000000") {
+		t.Errorf("expected 'removed aaa000000000' in stderr, got: %q", got)
+	}
+	if !strings.Contains(got, "removed bbb000000000") {
+		t.Errorf("expected 'removed bbb000000000' in stderr, got: %q", got)
+	}
+	// Summary line.
+	if !strings.Contains(got, "removed 2 box(es)") {
+		t.Errorf("expected 'removed 2 box(es)' summary in stderr, got: %q", got)
+	}
+}
+
+func TestRm_QuietSuppressesSuccessMessages(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+	isolateState(t)
+
+	projID, projAbs := setupProject(t)
+	name := "agentbox-" + projID
+	rt.boxes[name] = container.Box{
+		ProjectID: projID,
+		CWD:       projAbs,
+		Status:    container.StatusRunning,
+	}
+
+	var stderr bytes.Buffer
+	l := &lifecycle.Lifecycle{
+		Cfg:    cfg,
+		Runtime: rt,
+		Quiet:  true,
+		Home:   t.TempDir(),
+		Stdout: &bytes.Buffer{},
+		Stderr: &stderr,
+	}
+	if err := l.Rm(lifecycle.RmOpts{Input: "."}); err != nil {
+		t.Fatalf("Rm (quiet): %v", err)
+	}
+	if strings.Contains(stderr.String(), "removed") {
+		t.Errorf("--quiet should suppress success message, got stderr: %q", stderr.String())
+	}
+}
+
+func TestRm_FailureDoesNotPrintRemoved(t *testing.T) {
+	rt := newFakeRuntime()
+	cfg := defaultTestCfg()
+
+	projID, _ := setupProject(t)
+	// No box in rt.boxes — Rm will fail because container doesn't exist.
+	// Actually, fakeRuntime.Rm just deletes from map (no error), so let's
+	// use failOn instead.
+	name := "agentbox-" + projID
+	rt.boxes[name] = container.Box{ProjectID: projID, Status: container.StatusRunning}
+	rt.failOn["Rm"] = errors.New("permission denied")
+
+	var stderr bytes.Buffer
+	l := &lifecycle.Lifecycle{
+		Cfg:    cfg,
+		Runtime: rt,
+		Home:   t.TempDir(),
+		Stdout: &bytes.Buffer{},
+		Stderr: &stderr,
+	}
+
+	err := l.Rm(lifecycle.RmOpts{Input: "."})
+	if err == nil {
+		t.Fatal("expected error from Rm failure")
+	}
+	if strings.Contains(stderr.String(), "removed "+projID) {
+		t.Errorf("should not print 'removed' on failure, got stderr: %q", stderr.String())
 	}
 }
