@@ -212,10 +212,18 @@ ls /tmp/ctx
 # Dockerfile  kits/
 ```
 
-`--print-tag` (noted in the design as a follow-up one-liner) would let the
-workflow derive the sha-pinned tag cleanly instead of grep-extracting it from
-`--print` output. Not included in this design; the current workflow uses a
-workaround.
+`--print-tag` is the second CLI/CI seam: it prints just the deterministic
+`agentbox/<sha[:12]>` tag for the resolved kit list without invoking the
+runner. The workflow uses it to compute the version-pinned remote tag:
+
+```yaml
+sha12=$(./agentbox build --print-tag ${{ matrix.kits }} | sed 's|agentbox/||')
+```
+
+The design originally deferred this as a "follow-up one-liner" and described
+a grep-from-`--print` workaround; during implementation it became clear the
+generated Dockerfile doesn't actually embed the tag, so the flag shipped in
+the same commit (`14990d5`) as the rest of Group B.
 
 ## Decoupling: Group A and Group B
 
@@ -248,9 +256,6 @@ committing to the CI workflow shape.
 - **A dedicated `agentbox pull` subcommand.** The pull-then-fall-back path
   inside `build` covers the real use cases. A standalone `pull` command adds
   surface for marginal value.
-- **`--print-tag` flag on `agentbox build`.** The CI workflow currently
-  grep-extracts the sha from `agentbox build --print` output. A clean
-  `--print-tag` flag is a one-liner follow-up.
 - **The doctor check's GHCR auth quirk.** The 401 against ghcr.io from a plain
   HTTP HEAD (described above) is a known limitation, not a bug. The actual
   pull path is unaffected.
