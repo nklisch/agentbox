@@ -56,78 +56,52 @@ func newConfigShowCmd() *cobra.Command {
 }
 
 func newConfigPathCmd() *cobra.Command {
-	var (
-		globalFlag  bool
-		projectFlag bool
-	)
 	cmd := &cobra.Command{
 		Use:   "path",
 		Short: "Print the config file path and exit",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			paths, err := config.DefaultPaths()
-			if err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-			if global.ConfigPath != "" {
-				paths.Global = global.ConfigPath
-			}
-			target := paths.Global
-			if projectFlag {
-				target = paths.Project
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), target)
-			return nil
-		},
 	}
-	cmd.Flags().BoolVar(&globalFlag, "global", false, "print global config path (default)")
-	cmd.Flags().BoolVar(&projectFlag, "project", false, "print project config path")
-	cmd.MarkFlagsMutuallyExclusive("global", "project")
+	projectFlag := globalProjectFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		target, err := resolveConfigTarget(*projectFlag)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), target)
+		return nil
+	}
 	return cmd
 }
 
 func newConfigEditCmd() *cobra.Command {
-	var (
-		globalFlag  bool
-		projectFlag bool
-	)
 	cmd := &cobra.Command{
 		Use:   "edit",
 		Short: "Open $EDITOR on the config file",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			paths, err := config.DefaultPaths()
-			if err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-			if global.ConfigPath != "" {
-				paths.Global = global.ConfigPath
-			}
-			target := paths.Global
-			if projectFlag {
-				target = paths.Project
-			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-			if err := state.EnsureFile(target); err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-			editor := os.Getenv("EDITOR")
-			if editor == "" {
-				editor = "vi"
-			}
-			ec := exec.Command(editor, target)
-			ec.Stdin = os.Stdin
-			ec.Stdout = cmd.OutOrStdout()
-			ec.Stderr = cmd.ErrOrStderr()
-			if err := ec.Run(); err != nil {
-				return exitcode.Wrap(exitcode.Generic, fmt.Errorf("editor %s: %w", editor, err))
-			}
-			return nil
-		},
 	}
-	cmd.Flags().BoolVar(&globalFlag, "global", false, "edit global config (default)")
-	cmd.Flags().BoolVar(&projectFlag, "project", false, "edit project config")
-	cmd.MarkFlagsMutuallyExclusive("global", "project")
+	projectFlag := globalProjectFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		target, err := resolveConfigTarget(*projectFlag)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return exitcode.Wrap(exitcode.Generic, err)
+		}
+		if err := state.EnsureFile(target); err != nil {
+			return exitcode.Wrap(exitcode.Generic, err)
+		}
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "vi"
+		}
+		ec := exec.Command(editor, target)
+		ec.Stdin = os.Stdin
+		ec.Stdout = cmd.OutOrStdout()
+		ec.Stderr = cmd.ErrOrStderr()
+		if err := ec.Run(); err != nil {
+			return exitcode.Wrap(exitcode.Generic, fmt.Errorf("editor %s: %w", editor, err))
+		}
+		return nil
+	}
 	return cmd
 }
 
@@ -137,19 +111,18 @@ func newConfigEditCmd() *cobra.Command {
 // read→mutate→encode→validate pipeline, and writes atomically. In --dry-run
 // mode it prints the proposed body and exits without writing.
 func editTarget(cmd *cobra.Command, useProject bool, mutate func(map[string]any) error) error {
-	paths, err := config.DefaultPaths()
+	target, err := resolveConfigTarget(useProject)
+	if err != nil {
+		return err
+	}
+
+	// Still need the full Paths for LoadProposed (to merge global+project during validation).
+	allPaths, err := config.DefaultPaths()
 	if err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
 	if global.ConfigPath != "" {
-		paths.Global = global.ConfigPath
-	}
-	target := paths.Global
-	if useProject {
-		if paths.Project == "" {
-			return exitcode.New(exitcode.InvalidArgs, "no project config path (run from a project directory)")
-		}
-		target = paths.Project
+		allPaths.Global = global.ConfigPath
 	}
 
 	body, err := config.EditFile(target, mutate)
@@ -158,7 +131,7 @@ func editTarget(cmd *cobra.Command, useProject bool, mutate func(map[string]any)
 	}
 
 	// Validate the merged config with the proposed body before touching disk.
-	proposed, err := config.LoadProposed(paths, target, body)
+	proposed, err := config.LoadProposed(allPaths, target, body)
 	if err != nil {
 		return exitcode.Wrap(exitcode.InvalidArgs, fmt.Errorf("config invalid after mutation: %w", err))
 	}
@@ -186,6 +159,30 @@ func globalProjectFlags(cmd *cobra.Command) *bool {
 	cmd.Flags().BoolVar(&projectFlag, "project", false, "edit project config (.agentbox.toml)")
 	cmd.MarkFlagsMutuallyExclusive("global", "project")
 	return &projectFlag
+}
+
+// resolveConfigTarget returns the absolute path of the config file the user
+// wants to read or write, honoring --project (override to project file) and
+// the global --config flag (override to a custom global path).
+//
+// Returns InvalidArgs if useProject is true but no project config exists
+// for the current directory.
+func resolveConfigTarget(useProject bool) (string, error) {
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		return "", exitcode.Wrap(exitcode.Generic, err)
+	}
+	if global.ConfigPath != "" {
+		paths.Global = global.ConfigPath
+	}
+	if useProject {
+		if paths.Project == "" {
+			return "", exitcode.New(exitcode.InvalidArgs,
+				"no project config path (run from a project directory)")
+		}
+		return paths.Project, nil
+	}
+	return paths.Global, nil
 }
 
 // parseBoolFriendly accepts on/off/true/false/enable/disable/yes/no
