@@ -9,16 +9,14 @@ PODMAN_COMPOSE_VERSION="${PODMAN_COMPOSE_VERSION:-1.5.0}"   # pip: verified 2026
 DOCKER_COMPOSE_VERSION="${DOCKER_COMPOSE_VERSION:-5.1.3}"   # github.com/docker/compose: verified 2026-05-05
 
 # --- Arch detection ---
-# ARCH is raw uname -m output (x86_64 / aarch64).
-# GO_ARCH (amd64 / arm64) is used for docker-compose binary URL.
+# docker/compose ships binaries named with the raw uname -m suffix
+# (docker-compose-linux-x86_64, docker-compose-linux-aarch64) — NOT the
+# Go-style amd64/arm64 names. Use ARCH directly. The earlier GO_ARCH
+# alias was wrong and 404'd both arches; verified 2026-05-07 against the
+# v5.1.3 release asset list.
 ARCH="$(uname -m)"
 case "$ARCH" in
-  x86_64)
-    GO_ARCH="amd64"
-    ;;
-  aarch64)
-    GO_ARCH="arm64"
-    ;;
+  x86_64|aarch64) ;;
   *)
     echo "unsupported arch: $ARCH" >&2
     exit 1
@@ -42,10 +40,11 @@ pip3 install --break-system-packages --no-cache-dir "podman-compose==${PODMAN_CO
 # --- docker-compose (standalone Go binary from GitHub releases) ---
 # This is the standalone docker-compose v2 binary (distinct from the
 # docker compose CLI plugin). Provides `docker-compose` on PATH.
-# Asset naming: docker-compose-linux-{GO_ARCH} — no archive, direct binary.
+# Asset naming: docker-compose-linux-{ARCH} where ARCH is the raw uname -m
+# suffix (x86_64 / aarch64) — confirmed against v5.1.3 release assets.
 echo "Installing docker-compose v${DOCKER_COMPOSE_VERSION}..."
 curl -fsSL \
-  "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${GO_ARCH}" \
+  "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${ARCH}" \
   -o /usr/local/bin/docker-compose
 chmod +x /usr/local/bin/docker-compose
 
