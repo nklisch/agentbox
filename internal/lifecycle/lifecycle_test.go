@@ -517,17 +517,21 @@ func TestRun_NoAttach(t *testing.T) {
 	cfg := defaultTestCfg()
 	setupProject(t)
 
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	l := newTestLifecycle(t, rt, cfg, nil)
 	l.Stdout = &stdout
+	l.Stderr = &stderr
 
 	err := l.Run(lifecycle.RunOpts{Attach: false})
 	if err != nil {
 		t.Fatalf("Run(noAttach): %v", err)
 	}
-	out := stdout.String()
-	if !strings.Contains(out, "(running)") {
-		t.Errorf("expected '(running)' in output, got: %q", out)
+	// Liveness print goes to stderr (informational, not primary output).
+	if strings.Contains(stdout.String(), "(running)") {
+		t.Errorf("liveness print should be on stderr, not stdout; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "(running)") {
+		t.Errorf("expected '(running)' on stderr, got: %q", stderr.String())
 	}
 	if containsCall(rt.calls, "Exec") {
 		t.Error("Exec should not be called when Attach=false")
@@ -539,9 +543,10 @@ func TestRun_AttachNonTTY_PrintsLiveness(t *testing.T) {
 	cfg := defaultTestCfg()
 	setupProject(t)
 
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	l := newTestLifecycle(t, rt, cfg, nil)
 	l.Stdout = &stdout
+	l.Stderr = &stderr
 
 	// Default stdinIsTerminal returns false in tests (no real TTY).
 	err := l.Run(lifecycle.RunOpts{Attach: true})
@@ -551,8 +556,12 @@ func TestRun_AttachNonTTY_PrintsLiveness(t *testing.T) {
 	if containsCall(rt.calls, "Exec") {
 		t.Error("Exec should not be called when stdin is not a TTY")
 	}
-	if !strings.Contains(stdout.String(), "(running)") {
-		t.Errorf("expected liveness print, got: %q", stdout.String())
+	// Liveness print goes to stderr (informational, not primary output).
+	if strings.Contains(stdout.String(), "(running)") {
+		t.Errorf("liveness print should be on stderr, not stdout; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "(running)") {
+		t.Errorf("expected liveness print on stderr, got: %q", stderr.String())
 	}
 }
 

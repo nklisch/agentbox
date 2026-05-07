@@ -291,12 +291,16 @@ func TestRun_NoAttach_FakeRuntime(t *testing.T) {
 	restore := setupFakeLifecycle(t, rt)
 	defer restore()
 
-	out, _, err := runCmd(t, "run", "--no-attach")
+	out, stderr, err := runCmd(t, "run", "--no-attach")
 	if err != nil {
 		t.Fatalf("run --no-attach: %v", err)
 	}
-	if !strings.Contains(out, "(running)") {
-		t.Errorf("expected '(running)' in output, got: %q", out)
+	// Liveness print goes to stderr (informational, not primary output).
+	if strings.Contains(out, "(running)") {
+		t.Errorf("liveness print should be on stderr, not stdout; stdout=%q", out)
+	}
+	if !strings.Contains(stderr, "(running)") {
+		t.Errorf("expected '(running)' on stderr, got: %q", stderr)
 	}
 }
 
@@ -693,12 +697,16 @@ func TestRun_AttachNonTTY_PrintsLiveness(t *testing.T) {
 	restoreTTY := withFakeTerminal(t, false)
 	defer restoreTTY()
 
-	out, _, err := runCmd(t, "run")
+	out, stderr, err := runCmd(t, "run")
 	if err != nil {
 		t.Fatalf("run (non-TTY): %v", err)
 	}
-	if !strings.Contains(out, "(running)") {
-		t.Errorf("expected liveness print with '(running)', got: %q", out)
+	// Liveness print goes to stderr (informational, not primary output).
+	if strings.Contains(out, "(running)") {
+		t.Errorf("liveness print should be on stderr, not stdout; stdout=%q", out)
+	}
+	if !strings.Contains(stderr, "(running)") {
+		t.Errorf("expected liveness print with '(running)' on stderr, got: %q", stderr)
 	}
 }
 
@@ -867,12 +875,16 @@ func TestRun_NoAttach_NonQuietPrintsLiveness(t *testing.T) {
 	restore := setupFakeLifecycle(t, rt)
 	defer restore()
 
-	out, _, err := runCmd(t, "run", "--no-attach")
+	out, stderr, err := runCmd(t, "run", "--no-attach")
 	if err != nil {
 		t.Fatalf("run --no-attach: %v", err)
 	}
-	if !strings.Contains(out, "(running)") {
-		t.Errorf("without --quiet, liveness print should appear: %q", out)
+	// Liveness print goes to stderr (informational, not primary output).
+	if strings.Contains(out, "(running)") {
+		t.Errorf("liveness print should be on stderr, not stdout; stdout=%q", out)
+	}
+	if !strings.Contains(stderr, "(running)") {
+		t.Errorf("without --quiet, liveness print should appear on stderr: %q", stderr)
 	}
 }
 

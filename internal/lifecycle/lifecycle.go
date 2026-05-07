@@ -203,7 +203,7 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 			claudeDir := paths.ExpandHome(cfgSrc, l.Home)
 			targets, err := CollectExternalSymlinkTargets(claudeDir)
 			if err != nil {
-				fmt.Fprintf(l.Stderr, "warning: scan %s for external symlinks: %v\n", claudeDir, err)
+				l.warn("warning: scan %s for external symlinks: %v", claudeDir, err)
 			}
 			in.ExtraSamePathMounts = append(in.ExtraSamePathMounts, targets...)
 		}
@@ -410,22 +410,18 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 	}
 
 	if !opts.Attach {
-		if !l.Quiet {
-			fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
-		}
+		l.info("%s (%s)", box.ProjectID, box.Status)
 		return nil
 	}
 	if !stdinIsTerminal() {
 		// Zellij needs a real TTY; fall back to liveness print.
-		if !l.Quiet {
-			fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
-		}
+		l.info("%s (%s)", box.ProjectID, box.Status)
 		return nil
 	}
 	err = l.zellijAttach(box)
 	if opts.DetachOnExit {
 		if stopErr := l.Runtime.Stop(container.ContainerName(box.ProjectID)); stopErr != nil {
-			fmt.Fprintf(l.Stderr, "warning: --detach-on-exit: stop container: %v\n", stopErr)
+			l.warn("warning: --detach-on-exit: stop container: %v", stopErr)
 		}
 	}
 	return err
@@ -458,9 +454,7 @@ func (l *Lifecycle) Shell(opts RunOpts) error {
 	}
 	if !stdinIsTerminal() {
 		// Both zellij and bare shell need a TTY for interactivity.
-		if !l.Quiet {
-			fmt.Fprintf(l.Stdout, "%s (%s)\n", box.ProjectID, box.Status)
-		}
+		l.info("%s (%s)", box.ProjectID, box.Status)
 		return nil
 	}
 	if opts.NoZellij {
@@ -600,9 +594,7 @@ func (l *Lifecycle) Attach(input string) error {
 	}
 	if !stdinIsTerminal() {
 		// Liveness check — exit clean without blocking.
-		if !l.Quiet {
-			fmt.Fprintf(l.Stdout, "%s (running)\n", box.ProjectID)
-		}
+		l.info("%s (running)", box.ProjectID)
 		return nil
 	}
 	// Regenerate the layout only when the file is empty or missing (e.g. if the
@@ -743,7 +735,7 @@ func (l *Lifecycle) rmOne(projID string, keepState bool) error {
 		if err := l.Network.Teardown(spec); err != nil {
 			// Non-fatal: log but don't fail the remove. The box container is
 			// already gone; a stale sidecar/network is recoverable.
-			fmt.Fprintf(l.Stderr, "warning: network teardown for %s: %v\n", projID, err)
+			l.warn("warning: network teardown for %s: %v", projID, err)
 		}
 	}
 	if !keepState {
@@ -751,9 +743,7 @@ func (l *Lifecycle) rmOne(projID string, keepState bool) error {
 			return exitcode.Wrap(exitcode.Generic, err)
 		}
 	}
-	if !l.Quiet {
-		fmt.Fprintf(l.Stderr, "removed %s\n", projID)
-	}
+	l.info("removed %s", projID)
 	return nil
 }
 
@@ -779,9 +769,7 @@ func (l *Lifecycle) rmAll(force, keepState bool) error {
 			return err
 		}
 		if !ok {
-			if !l.Quiet {
-				fmt.Fprintln(l.Stderr, "aborted")
-			}
+			l.info("aborted")
 			return nil
 		}
 	}
@@ -796,8 +784,8 @@ func (l *Lifecycle) rmAll(force, keepState bool) error {
 		}
 		removed++
 	}
-	if !l.Quiet && removed > 0 {
-		fmt.Fprintf(l.Stderr, "removed %d box(es)\n", removed)
+	if removed > 0 {
+		l.info("removed %d box(es)", removed)
 	}
 	return firstErr
 }
