@@ -61,11 +61,13 @@ ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64)
     RUST_TRIPLE="x86_64-unknown-linux-gnu"
+    MUSL_TRIPLE="x86_64-unknown-linux-musl"
     GO_ARCH="amd64"
     BUN_ARCH="x64"
     ;;
   aarch64)
     RUST_TRIPLE="aarch64-unknown-linux-gnu"
+    MUSL_TRIPLE="aarch64-unknown-linux-musl"
     GO_ARCH="arm64"
     BUN_ARCH="aarch64"
     ;;
@@ -240,12 +242,29 @@ echo "Installing nightly toolchain..."
 /opt/rust/bin/rustup toolchain install "${RUST_TOOLCHAIN_NIGHTLY}"
 
 # cargo-watch: watch files and re-run cargo commands. Version-pinned for reproducibility.
-echo "Installing cargo-watch v${CARGO_WATCH_VERSION}..."
-/opt/rust/bin/cargo install "cargo-watch@${CARGO_WATCH_VERSION}"
+# Use the prebuilt binary instead of `cargo install` — building from source pulls a
+# heavy Rust dep tree and the linker step regularly OOMs on memory-constrained
+# podman machines (notably arm64 macOS hosts with default VM memory).
+# Archive: cargo-watch-v{VER}-{RUST_TRIPLE}.tar.xz; binary at versioned-subdir/cargo-watch.
+# xz-utils is provided by the base kit's packages.txt.
+echo "Installing cargo-watch v${CARGO_WATCH_VERSION} (prebuilt)..."
+curl -fsSL "https://github.com/watchexec/cargo-watch/releases/download/v${CARGO_WATCH_VERSION}/cargo-watch-v${CARGO_WATCH_VERSION}-${RUST_TRIPLE}.tar.xz" \
+  -o "$TMP/cargo-watch.tar.xz"
+tar -xJf "$TMP/cargo-watch.tar.xz" -C "$TMP"
+install -m 0755 "$TMP/cargo-watch-v${CARGO_WATCH_VERSION}-${RUST_TRIPLE}/cargo-watch" /opt/rust/bin/cargo-watch
 
 # sccache: compiler cache for Rust/C++ builds. Speeds up repeated container builds.
-echo "Installing sccache v${SCCACHE_VERSION}..."
-/opt/rust/bin/cargo install "sccache@${SCCACHE_VERSION}"
+# Use the prebuilt binary — `cargo install sccache` pulls in tokio, hyper, opendal,
+# reqsign, ring, blake3, zstd, etc. The single-codegen-unit release link step needs
+# ~3-4 GB RSS and gets SIGKILLed by the kernel OOM killer on podman machines with
+# default memory. sccache only publishes musl builds for linux; musl binaries run
+# fine on debian:bookworm-slim (glibc) — they're statically linked.
+# Archive: sccache-v{VER}-{MUSL_TRIPLE}.tar.gz; binary at versioned-subdir/sccache.
+echo "Installing sccache v${SCCACHE_VERSION} (prebuilt)..."
+curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${MUSL_TRIPLE}.tar.gz" \
+  -o "$TMP/sccache.tar.gz"
+tar -xzf "$TMP/sccache.tar.gz" -C "$TMP"
+install -m 0755 "$TMP/sccache-v${SCCACHE_VERSION}-${MUSL_TRIPLE}/sccache" /opt/rust/bin/sccache
 
 # Verify rustc is working.
 /opt/rust/bin/rustc --version
