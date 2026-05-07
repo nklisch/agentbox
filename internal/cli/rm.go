@@ -3,7 +3,6 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/nklisch/agentbox/internal/exitcode"
 	"github.com/nklisch/agentbox/internal/lifecycle"
 )
 
@@ -18,17 +17,10 @@ func newRmCmd() *cobra.Command {
 		Short: "Stop and remove boxes + their session state",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res, err := loadConfig()
+			l, _, err := initLifecycleCmd(cmd)
 			if err != nil {
 				return err
 			}
-			l, err := newLifecycle(res.Config)
-			if err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-			l.Stdout = cmd.OutOrStdout()
-			l.Stderr = cmd.ErrOrStderr()
-			l.Quiet = global.Quiet
 			opts := lifecycle.RmOpts{All: all, Force: force, KeepState: keepState, DryRun: global.DryRun}
 			if len(args) == 1 {
 				opts.Input = args[0]

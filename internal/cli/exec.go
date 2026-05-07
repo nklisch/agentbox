@@ -61,17 +61,10 @@ func newExecCmd() *cobra.Command {
 					"exec requires <project_id> <command> [args...], got %d arg(s)", len(positional))
 			}
 
-			res, err := loadConfig()
+			l, _, err := initLifecycleCmd(cmd)
 			if err != nil {
 				return err
 			}
-			l, err := newLifecycle(res.Config)
-			if err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-			l.Stdout = cmd.OutOrStdout()
-			l.Stderr = cmd.ErrOrStderr()
-			l.Quiet = global.Quiet
 			return l.Exec(lifecycle.ExecOpts{
 				Input:       positional[0],
 				Argv:        positional[1:],

@@ -35,24 +35,18 @@ func newRunCmd() *cobra.Command {
 		Short: "Create or attach to the per-project box, launch the configured agent",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			cfg := res.Config
-
 			if global.DryRun {
+				res, err := loadConfig()
+				if err != nil {
+					return err
+				}
 				return runDryRun(cmd, res, args, kitsFlag, networkFlag, layoutFlag)
 			}
 
-			l, err := newLifecycle(cfg)
+			l, _, err := initLifecycleCmd(cmd)
 			if err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
+				return err
 			}
-			// Redirect lifecycle output through cobra's writer so tests can capture it.
-			l.Stdout = cmd.OutOrStdout()
-			l.Stderr = cmd.ErrOrStderr()
-			l.Quiet = global.Quiet
 
 			if noAttach && detachOnExit {
 				return exitcode.New(exitcode.InvalidArgs,

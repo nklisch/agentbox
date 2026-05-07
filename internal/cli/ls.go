@@ -24,17 +24,10 @@ func newLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List boxes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res, err := loadConfig()
+			l, _, err := initLifecycleCmd(cmd)
 			if err != nil {
 				return err
 			}
-			l, err := newLifecycle(res.Config)
-			if err != nil {
-				return exitcode.Wrap(exitcode.Generic, err)
-			}
-			l.Stdout = cmd.OutOrStdout()
-			l.Stderr = cmd.ErrOrStderr()
-			l.Quiet = global.Quiet
 			boxes, err := l.Ls(lifecycle.LsFilter{
 				All:     all,
 				Project: project,
