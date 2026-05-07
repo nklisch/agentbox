@@ -20,10 +20,19 @@ type Paths struct {
 //
 //	Global  = $XDG_CONFIG_HOME/agentbox/config.toml (or ~/.config/agentbox/...)
 //	Project = $PWD/.agentbox.toml
+//
+// $XDG_CONFIG_HOME is honored on all platforms when set. This allows tests
+// (and Linux deployments) to override the config dir via the XDG standard.
 func DefaultPaths() (Paths, error) {
-	cfgDir, err := os.UserConfigDir()
-	if err != nil {
-		return Paths{}, fmt.Errorf("resolve config dir: %w", err)
+	var cfgDir string
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		cfgDir = xdg
+	} else {
+		var err error
+		cfgDir, err = os.UserConfigDir()
+		if err != nil {
+			return Paths{}, fmt.Errorf("resolve config dir: %w", err)
+		}
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

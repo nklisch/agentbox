@@ -81,6 +81,25 @@ func (r *Registry) Get(name string) (Kit, error) {
 	return Kit{}, fmt.Errorf("kit %q: %w", name, fs.ErrNotExist)
 }
 
+// AllBuiltin reports whether every kit in the resolved list comes from the
+// built-in registry (i.e., none are user-authored or shadowed). Pull-from-
+// registry eligibility hinges on this: a user kit's content cannot match a
+// pre-published image, so the pull path skips them and falls through to
+// local build.
+//
+// Returns false for an empty list — eligibility requires positive evidence.
+func AllBuiltin(res Resolved) bool {
+	if len(res.Kits) == 0 {
+		return false
+	}
+	for _, k := range res.Kits {
+		if k.Source != "builtin" {
+			return false
+		}
+	}
+	return true
+}
+
 // Describe returns name + description + source for every known kit, in
 // alphabetical order. Used by `agentbox build --list`.
 func (r *Registry) Describe() ([]KitInfo, error) {

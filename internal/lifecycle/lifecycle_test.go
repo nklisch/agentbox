@@ -210,6 +210,9 @@ func (r *fakeKitsRunner) Build(ctx kits.BuildContext) error { return r.buildErr 
 func (r *fakeKitsRunner) HasImage(tag string) (bool, error) { return true, nil }
 func (r *fakeKitsRunner) LiveImageRefs() ([]string, error)  { return nil, nil }
 func (r *fakeKitsRunner) RemoveImage(tag string) error       { return nil }
+func (r *fakeKitsRunner) Pull(ctx kits.PullContext) error    { return nil }
+func (r *fakeKitsRunner) Tag(src, dst string) error          { return nil }
+func (r *fakeKitsRunner) Bin() string                        { return "podman" }
 
 // newTestBuilder returns a real *kits.Builder backed by builtinkits + fakeKitsRunner.
 // The fakeRunner's HasImage returns true so the cache always hits (no actual build).
@@ -231,7 +234,8 @@ func newTestBuilder(t *testing.T, buildErr error) *kits.Builder {
 }
 
 // setupProject changes the test's working directory to a temp dir and returns
-// (projectID, absPath).
+// (projectID, absPath). Resolves symlinks to match project.Resolve() behavior
+// (important on macOS where os.TempDir() returns /var/... but EvalSymlinks → /private/var/...).
 func setupProject(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -240,9 +244,14 @@ func setupProject(t *testing.T) (string, string) {
 		t.Fatalf("chdir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(orig) })
-	h := sha1.Sum([]byte(dir))
+	// Resolve symlinks to match project.Resolve() which calls filepath.EvalSymlinks.
+	abs := dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		abs = resolved
+	}
+	h := sha1.Sum([]byte(abs))
 	id := hex.EncodeToString(h[:])[:12]
-	return id, dir
+	return id, abs
 }
 
 // defaultTestCfg returns a config with network=open and agents using only the

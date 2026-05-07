@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -241,7 +242,12 @@ func (r *fakeRuntime) NetworkRm(name string) error             { return nil }
 func (r *fakeRuntime) NetworkExists(name string) (bool, error) { return false, nil }
 
 // projectID computes the 12-char project ID for a path (matches project.IDFromPath).
+// Resolves symlinks to match project.Resolve() behavior (important on macOS where
+// os.TempDir() returns /var/... but filepath.EvalSymlinks → /private/var/...).
 func projectID(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
 	h := sha1.Sum([]byte(path))
 	return hex.EncodeToString(h[:])[:12]
 }

@@ -48,6 +48,75 @@ func TestKitImageTag_Deterministic(t *testing.T) {
 	}
 }
 
+// ---- Unit 2: RemoteImageRef / RemoteAliasRef ----
+
+func TestRemoteImageRef_Format(t *testing.T) {
+	kits := []string{"polyglot", "claude", "base"}
+	ref := runspec.RemoteImageRef("ghcr.io/n/agentbox-kits", "0.3.0", kits)
+	// Should be ghcr.io/n/agentbox-kits:0.3.0-<12hex>
+	localTag := runspec.KitImageTag(kits)
+	sha := strings.TrimPrefix(localTag, "agentbox/")
+	want := "ghcr.io/n/agentbox-kits:0.3.0-" + sha
+	if ref != want {
+		t.Errorf("RemoteImageRef() = %q, want %q", ref, want)
+	}
+}
+
+func TestRemoteImageRef_VersionNormalization(t *testing.T) {
+	kits := []string{"polyglot", "claude"}
+	// v-prefix and no-prefix should produce the same tag.
+	ref1 := runspec.RemoteImageRef("ghcr.io/n/agentbox-kits", "v0.3.0", kits)
+	ref2 := runspec.RemoteImageRef("ghcr.io/n/agentbox-kits", "0.3.0", kits)
+	if ref1 != ref2 {
+		t.Errorf("v-prefix normalization failed: %q != %q", ref1, ref2)
+	}
+}
+
+func TestRemoteImageRef_EmptyHost(t *testing.T) {
+	ref := runspec.RemoteImageRef("", "0.3.0", []string{"polyglot", "claude"})
+	if ref != "" {
+		t.Errorf("RemoteImageRef with empty host should return empty, got %q", ref)
+	}
+}
+
+func TestRemoteImageRef_OrderInvariant(t *testing.T) {
+	kits1 := []string{"claude", "polyglot", "base"}
+	kits2 := []string{"base", "polyglot", "claude"}
+	ref1 := runspec.RemoteImageRef("ghcr.io/n/agentbox-kits", "0.3.0", kits1)
+	ref2 := runspec.RemoteImageRef("ghcr.io/n/agentbox-kits", "0.3.0", kits2)
+	if ref1 != ref2 {
+		t.Errorf("RemoteImageRef not order-invariant: %q != %q", ref1, ref2)
+	}
+}
+
+func TestRemoteAliasRef_StripsBase(t *testing.T) {
+	kits := []string{"base", "polyglot", "containers", "claude"}
+	ref := runspec.RemoteAliasRef("ghcr.io/n/agentbox-kits", "0.3.0", kits)
+	want := "ghcr.io/n/agentbox-kits:0.3.0-polyglot-containers-claude"
+	if ref != want {
+		t.Errorf("RemoteAliasRef() = %q, want %q", ref, want)
+	}
+}
+
+func TestRemoteAliasRef_EmptyHostOrVersion(t *testing.T) {
+	kits := []string{"base", "claude"}
+	if ref := runspec.RemoteAliasRef("", "0.3.0", kits); ref != "" {
+		t.Errorf("empty host should return empty, got %q", ref)
+	}
+	if ref := runspec.RemoteAliasRef("ghcr.io/n/kits", "", kits); ref != "" {
+		t.Errorf("empty version should return empty, got %q", ref)
+	}
+}
+
+func TestRemoteAliasRef_OnlyBase(t *testing.T) {
+	// When all kits are "base", nickname is "base".
+	ref := runspec.RemoteAliasRef("ghcr.io/n/agentbox-kits", "0.3.0", []string{"base"})
+	want := "ghcr.io/n/agentbox-kits:0.3.0-base"
+	if ref != want {
+		t.Errorf("RemoteAliasRef() = %q, want %q", ref, want)
+	}
+}
+
 func TestNetworkArg_Off(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Network.Mode = "off"

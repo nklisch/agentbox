@@ -70,6 +70,43 @@ type BuildInput struct {
 	ClaudeSettingsHostPath string // <state>/claude-settings.json; shadow-mounted ro over /root/.claude/settings.json
 }
 
+// RemoteImageRef returns the canonical GHCR reference for a resolved kit
+// list at a given agentbox version. Format:
+//
+//	<host>:<version>-<sha1[:12]>
+//
+// where the version is normalized to drop a leading "v" so v0.3.0 and 0.3.0
+// produce the same tag. Returns "" if host is empty.
+func RemoteImageRef(host, version string, kits []string) string {
+	if host == "" {
+		return ""
+	}
+	v := strings.TrimPrefix(version, "v")
+	sha := strings.TrimPrefix(KitImageTag(kits), "agentbox/")
+	return fmt.Sprintf("%s:%s-%s", host, v, sha)
+}
+
+// RemoteAliasRef returns the human-readable alias variant. The nickname
+// is the resolved kit list without "base", joined with "-". Returns "" if
+// host or version is empty.
+func RemoteAliasRef(host, version string, kits []string) string {
+	if host == "" || version == "" {
+		return ""
+	}
+	parts := make([]string, 0, len(kits))
+	for _, k := range kits {
+		if k == "base" {
+			continue
+		}
+		parts = append(parts, k)
+	}
+	if len(parts) == 0 {
+		parts = []string{"base"}
+	}
+	v := strings.TrimPrefix(version, "v")
+	return fmt.Sprintf("%s:%s-%s", host, v, strings.Join(parts, "-"))
+}
+
 // KitImageTag returns the canonical image tag for a kit list.
 //
 //	tag = "agentbox/" + sha1(joined_resolved_list)[:12]

@@ -854,6 +854,9 @@ type fakeRunner struct {
 	liveRefs  []string
 	removed   []string
 	failBuild error
+	pullCalls []kits.PullContext
+	tagCalls  [][2]string
+	pullErr   *kits.PullError
 }
 
 func (r *fakeRunner) Build(ctx kits.BuildContext) error {
@@ -872,6 +875,23 @@ func (r *fakeRunner) LiveImageRefs() ([]string, error) {
 func (r *fakeRunner) RemoveImage(tag string) error {
 	r.removed = append(r.removed, tag)
 	return nil
+}
+
+func (r *fakeRunner) Pull(ctx kits.PullContext) error {
+	r.pullCalls = append(r.pullCalls, ctx)
+	if r.pullErr != nil {
+		return r.pullErr
+	}
+	return nil
+}
+
+func (r *fakeRunner) Tag(src, dst string) error {
+	r.tagCalls = append(r.tagCalls, [2]string{src, dst})
+	return nil
+}
+
+func (r *fakeRunner) Bin() string {
+	return "podman"
 }
 
 func newBuilder(t *testing.T, runner *fakeRunner) *kits.Builder {
@@ -1055,6 +1075,418 @@ func TestBuilder_Prune(t *testing.T) {
 	}
 	if len(runner.removed) != 1 || runner.removed[0] != staleTag {
 		t.Errorf("Runner.RemoveImage should be called once for stale, got %v", runner.removed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for registry pull path (Units 3–6)
+// ---------------------------------------------------------------------------
+
+// TestClassifyPullStderr is a table-driven test of the pure classification
+// function. It covers all the keyword categories.
+func TestClassifyPullStderr(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		ctxErr error
+		want   kits.PullErrorKind
+	}{
+		{
+			name:   "manifest unknown",
+			stderr: "Error: reading manifest latest in ghcr.io/foo/bar: manifest unknown",
+			want:   kits.PullErrorNotFound,
+		},
+		{
+			name:   "not found",
+			stderr: "Error: ghcr.io/foo/bar: image not found",
+			want:   kits.PullErrorNotFound,
+		},
+		{
+			name:   "404 in stderr",
+			stderr: "Trying to pull ghcr.io/foo/bar...  Error: Request failed with status 404",
+			want:   kits.PullErrorNotFound,
+		},
+		{
+			name:   "unauthorized",
+			stderr: "Error: copying reference ghcr.io/foo/bar: unauthorized: authentication required",
+			want:   kits.PullErrorAuth,
+		},
+		{
+			name:   "denied",
+			stderr: "Error: access denied for ghcr.io/private/repo",
+			want:   kits.PullErrorAuth,
+		},
+		{
+			name:   "401 in stderr",
+			stderr: "HTTP/2 401 from ghcr.io",
+			want:   kits.PullErrorAuth,
+		},
+		{
+			name:   "403 in stderr",
+			stderr: "Request forbidden: 403",
+			want:   kits.PullErrorAuth,
+		},
+		{
+			name:   "no such host",
+			stderr: "Error: Get https://ghcr.invalid/v2/: dial tcp: lookup ghcr.invalid: no such host",
+			want:   kits.PullErrorNetwork,
+		},
+		{
+			name:   "connection refused",
+			stderr: "Error: Get https://localhost:5000/v2/: connection refused",
+			want:   kits.PullErrorNetwork,
+		},
+		{
+			name:   "dial tcp",
+			stderr: "Error: dial tcp 1.2.3.4:443: connect: connection refused",
+			want:   kits.PullErrorNetwork,
+		},
+		{
+			name:   "timeout in stderr",
+			stderr: "Error: timeout waiting for response",
+			want:   kits.PullErrorNetwork,
+		},
+		{
+			name:   "unknown error",
+			stderr: "Error: something completely unexpected happened",
+			want:   kits.PullErrorUnknown,
+		},
+		{
+			name:   "empty stderr",
+			stderr: "",
+			want:   kits.PullErrorUnknown,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := kits.ClassifyPullStderrForTest(tt.stderr, tt.ctxErr)
+			if got != tt.want {
+				t.Errorf("classifyPullStderr(%q) = %v, want %v", tt.stderr, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAllBuiltin_AllBuiltin verifies that a fully built-in resolved list returns true.
+func TestAllBuiltin_AllBuiltin(t *testing.T) {
+	reg := fakeRegistry("base", "node")
+	res, err := kits.Resolve(reg, []string{"node"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !kits.AllBuiltin(res) {
+		t.Error("AllBuiltin should return true for all-builtin resolved list")
+	}
+}
+
+// TestAllBuiltin_UserShadow verifies that a user-shadowed kit returns false.
+func TestAllBuiltin_UserShadow(t *testing.T) {
+	userDir := t.TempDir()
+	baseDir := userDir + "/base"
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"manifest.toml": baseManifest,
+		"packages.txt":  "",
+		"install.sh":    "#!/bin/bash\n",
+		"env.sh":        "# env\n",
+	} {
+		if err := os.WriteFile(baseDir+"/"+name, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	builtinFS := fstest.MapFS{
+		"base/manifest.toml": &fstest.MapFile{Data: []byte(baseManifest)},
+		"base/packages.txt":  &fstest.MapFile{Data: []byte("")},
+		"base/install.sh":    &fstest.MapFile{Data: []byte("#!/bin/bash\n")},
+		"base/env.sh":        &fstest.MapFile{Data: []byte("# env\n")},
+	}
+	reg := kits.NewRegistry(builtinFS, userDir)
+	res, err := kits.Resolve(reg, []string{"base"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if kits.AllBuiltin(res) {
+		t.Error("AllBuiltin should return false when a kit is user-shadowed")
+	}
+}
+
+// TestAllBuiltin_EmptyList verifies empty resolved list returns false.
+func TestAllBuiltin_EmptyList(t *testing.T) {
+	res := kits.Resolved{}
+	if kits.AllBuiltin(res) {
+		t.Error("AllBuiltin should return false for an empty resolved list")
+	}
+}
+
+// TestBuild_PullHit_WhenAllBuiltinAndEnabled verifies pull path succeeds.
+func TestBuild_PullHit_WhenAllBuiltinAndEnabled(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilderWithRegistry(t, runner)
+
+	result, err := b.Build([]string{"base"}, kits.BuildOpts{
+		Stderr: os.Stderr,
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !result.PullHit {
+		t.Error("expected PullHit=true when registry enabled and pull succeeds")
+	}
+	if result.CacheHit {
+		t.Error("PullHit result should not set CacheHit")
+	}
+	if len(runner.pullCalls) != 1 {
+		t.Errorf("expected 1 Pull call, got %d", len(runner.pullCalls))
+	}
+	if len(runner.tagCalls) != 1 {
+		t.Errorf("expected 1 Tag call, got %d", len(runner.tagCalls))
+	}
+}
+
+// TestBuild_NoPullFlag_SkipsRegistry verifies --no-pull skips pull entirely.
+func TestBuild_NoPullFlag_SkipsRegistry(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilderWithRegistry(t, runner)
+
+	_, err := b.Build([]string{"base"}, kits.BuildOpts{NoPull: true})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(runner.pullCalls) != 0 {
+		t.Errorf("expected 0 Pull calls with NoPull=true, got %d", len(runner.pullCalls))
+	}
+	if len(runner.builds) != 1 {
+		t.Errorf("expected 1 local Build call, got %d", len(runner.builds))
+	}
+}
+
+// TestBuild_RegistryDisabled_SkipsRegistry verifies disabled registry skips pull.
+func TestBuild_RegistryDisabled_SkipsRegistry(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilderWithRegistry(t, runner)
+	b.RegistryEnabled = false
+
+	_, err := b.Build([]string{"base"}, kits.BuildOpts{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(runner.pullCalls) != 0 {
+		t.Errorf("expected 0 Pull calls with RegistryEnabled=false, got %d", len(runner.pullCalls))
+	}
+}
+
+// TestBuild_UserKitDisablesPull verifies that a user-shadowed kit skips pull.
+func TestBuild_UserKitDisablesPull(t *testing.T) {
+	userDir := t.TempDir()
+	baseDir := userDir + "/base"
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"manifest.toml": baseManifest,
+		"packages.txt":  "",
+		"install.sh":    "#!/bin/bash\n",
+		"env.sh":        "# env\n",
+	} {
+		if err := os.WriteFile(baseDir+"/"+name, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	builtinFS := fstest.MapFS{
+		"base/manifest.toml": &fstest.MapFile{Data: []byte(baseManifest)},
+		"base/packages.txt":  &fstest.MapFile{Data: []byte("")},
+		"base/install.sh":    &fstest.MapFile{Data: []byte("#!/bin/bash\n")},
+		"base/env.sh":        &fstest.MapFile{Data: []byte("# env\n")},
+	}
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cache, err := kits.NewCache()
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := &kits.Builder{
+		Registry:        kits.NewRegistry(builtinFS, userDir),
+		Cache:           cache,
+		Runner:          runner,
+		Version:         "v0.1",
+		RegistryEnabled: true,
+		RegistryHost:    "ghcr.io/n/agentbox-kits",
+	}
+
+	_, err = b.Build([]string{"base"}, kits.BuildOpts{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(runner.pullCalls) != 0 {
+		t.Errorf("expected 0 Pull calls for user-shadowed kit, got %d", len(runner.pullCalls))
+	}
+	if len(runner.builds) != 1 {
+		t.Errorf("expected 1 local Build call, got %d", len(runner.builds))
+	}
+}
+
+// TestBuild_PullNotFound_FallsBackToLocal verifies NotFound falls back silently.
+func TestBuild_PullNotFound_FallsBackToLocal(t *testing.T) {
+	notFoundErr := &kits.PullError{Kind: kits.PullErrorNotFound, Wrapped: errors.New("not found")}
+	runner := &fakeRunner{
+		hasImage: map[string]bool{},
+		pullErr:  notFoundErr,
+	}
+	b := newBuilderWithRegistry(t, runner)
+	var stderr strings.Builder
+
+	result, err := b.Build([]string{"base"}, kits.BuildOpts{Stderr: &stderr})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if result.PullHit {
+		t.Error("PullHit should be false on NotFound")
+	}
+	if len(runner.builds) != 1 {
+		t.Errorf("expected 1 local build after NotFound fallback, got %d", len(runner.builds))
+	}
+	if !strings.Contains(stderr.String(), "building locally") {
+		t.Errorf("stderr should mention 'building locally', got: %q", stderr.String())
+	}
+}
+
+// TestBuild_PullAuth_FallsBackWithError verifies Auth error surfaces to stderr.
+func TestBuild_PullAuth_FallsBackWithError(t *testing.T) {
+	authErr := &kits.PullError{Kind: kits.PullErrorAuth, Wrapped: errors.New("unauthorized")}
+	runner := &fakeRunner{
+		hasImage: map[string]bool{},
+		pullErr:  authErr,
+	}
+	b := newBuilderWithRegistry(t, runner)
+	var stderr strings.Builder
+
+	result, err := b.Build([]string{"base"}, kits.BuildOpts{Stderr: &stderr})
+	if err != nil {
+		t.Fatalf("Build should still succeed via local fallback: %v", err)
+	}
+	if result.PullHit {
+		t.Error("PullHit should be false on Auth error")
+	}
+	if len(runner.builds) != 1 {
+		t.Errorf("expected 1 local build, got %d", len(runner.builds))
+	}
+	if !strings.Contains(stderr.String(), "auth required") {
+		t.Errorf("stderr should mention 'auth required', got: %q", stderr.String())
+	}
+}
+
+// TestBuild_NoCache_SkipsRegistry verifies NoCache skips pull path.
+func TestBuild_NoCache_SkipsRegistry(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilderWithRegistry(t, runner)
+
+	_, err := b.Build([]string{"base"}, kits.BuildOpts{NoCache: true})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(runner.pullCalls) != 0 {
+		t.Errorf("expected 0 Pull calls with NoCache=true, got %d", len(runner.pullCalls))
+	}
+	if len(runner.builds) != 1 {
+		t.Errorf("expected 1 local Build call, got %d", len(runner.builds))
+	}
+}
+
+// TestBuild_CacheHit_SkipsPull verifies cache hit skips pull entirely.
+func TestBuild_CacheHit_SkipsPull(t *testing.T) {
+	reg := fakeRegistry("base")
+	res, err := kits.Resolve(reg, []string{"base"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	runner := &fakeRunner{
+		hasImage: map[string]bool{res.Tag: true},
+	}
+	b := newBuilderWithRegistry(t, runner)
+
+	// Populate cache with a local build (NoPull=true).
+	_, err = b.Build([]string{"base"}, kits.BuildOpts{NoPull: true})
+	if err != nil {
+		t.Fatalf("first Build: %v", err)
+	}
+	runner.pullCalls = nil // reset
+
+	// Second build: should hit cache, skip pull.
+	result, err := b.Build([]string{"base"}, kits.BuildOpts{})
+	if err != nil {
+		t.Fatalf("second Build: %v", err)
+	}
+	if !result.CacheHit {
+		t.Error("expected CacheHit=true on second build")
+	}
+	if len(runner.pullCalls) != 0 {
+		t.Errorf("expected 0 Pull calls on cache hit, got %d", len(runner.pullCalls))
+	}
+}
+
+// TestCacheEntry_SourceField verifies the new Source field is persisted.
+func TestCacheEntry_SourceField(t *testing.T) {
+	cache := newCacheForTest(t)
+	res := resolveBase(t)
+	hashes, _ := kits.HashesFromResolved(res)
+
+	entry := kits.CacheEntry{
+		Tag:       res.Tag,
+		Kits:      res.Names(),
+		KitHashes: hashes,
+		Source:    "registry",
+	}
+	if err := cache.Save(entry, ""); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := cache.Lookup(res.Tag)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if got.Source != "registry" {
+		t.Errorf("Source = %q, want %q", got.Source, "registry")
+	}
+}
+
+// TestCacheEntry_OldEntryNoSource verifies old entries without Source decode OK.
+func TestCacheEntry_OldEntryNoSource(t *testing.T) {
+	cache := newCacheForTest(t)
+	res := resolveBase(t)
+	hashes, _ := kits.HashesFromResolved(res)
+
+	entry := kits.CacheEntry{
+		Tag:       res.Tag,
+		Kits:      res.Names(),
+		KitHashes: hashes,
+		// Source intentionally omitted.
+	}
+	if err := cache.Save(entry, ""); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	match, err := cache.HasMatch(res)
+	if err != nil {
+		t.Fatalf("HasMatch: %v", err)
+	}
+	if !match {
+		t.Error("HasMatch should return true for old entry without Source field")
+	}
+}
+
+// newBuilderWithRegistry creates a Builder with registry enabled.
+func newBuilderWithRegistry(t *testing.T, runner *fakeRunner) *kits.Builder {
+	t.Helper()
+	cache := newCacheForTest(t)
+	reg := fakeRegistry("base")
+	return &kits.Builder{
+		Registry:        reg,
+		Cache:           cache,
+		Runner:          runner,
+		Version:         "v0.1",
+		RegistryEnabled: true,
+		RegistryHost:    "ghcr.io/n/agentbox-kits",
 	}
 }
 

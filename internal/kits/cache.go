@@ -21,6 +21,7 @@ type CacheEntry struct {
 	KitHashes       map[string]string `json:"kit_hashes"`
 	BuiltAt         time.Time         `json:"built_at"`
 	AgentboxVersion string            `json:"agentbox_version"`
+	Source          string            `json:"source,omitempty"` // "registry" | "local" | "" (old entries)
 }
 
 // Cache is the kit-image cache. Each entry is a pair of files:

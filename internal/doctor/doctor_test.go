@@ -2,6 +2,8 @@ package doctor_test
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strings"
 	"testing"
@@ -327,5 +329,111 @@ func TestContainersConfigCheck_KitButEnableFalse_IsWarn(t *testing.T) {
 	}
 	if !strings.Contains(c.Message, "enable=true") {
 		t.Errorf("message should mention 'enable=true', got: %q", c.Message)
+	}
+}
+
+// ---- Unit 8: registryReachableCheck tests ----
+
+// TestRegistryReachableCheck_Disabled verifies check returns OK when disabled.
+func TestRegistryReachableCheck_Disabled(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Registry.Enabled = false
+	result := doctor.Run(cfg)
+
+	c := findCheck(result, "registry-reachable")
+	if c == nil {
+		t.Fatal("registry-reachable check not found")
+	}
+	if c.Status != doctor.StatusOK {
+		t.Errorf("status = %q, want OK when registry disabled", c.Status)
+	}
+	if !strings.Contains(c.Message, "skipping") {
+		t.Errorf("message should mention 'skipping', got: %q", c.Message)
+	}
+}
+
+// TestRegistryReachableCheck_Reachable verifies OK when server returns 200.
+func TestRegistryReachableCheck_Reachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// Use the test server URL as the probe URL directly.
+	c := doctor.DoRegistryProbeForTest("registry-reachable", "ghcr.io/test/kits",
+		"ghcr.io/test/kits:latest-polyglot-containers-claude", srv.URL+"/v2/test/kits/manifests/latest-polyglot-containers-claude")
+	if c.Status != doctor.StatusOK {
+		t.Errorf("status = %q, want OK for 200 response; msg: %s", c.Status, c.Message)
+	}
+	if !strings.Contains(c.Message, "reachable") {
+		t.Errorf("message should mention 'reachable', got: %q", c.Message)
+	}
+}
+
+// TestRegistryReachableCheck_NotPublished verifies WARN when server returns 404.
+func TestRegistryReachableCheck_NotPublished(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := doctor.DoRegistryProbeForTest("registry-reachable", "ghcr.io/test/kits",
+		"ghcr.io/test/kits:latest-polyglot-containers-claude", srv.URL+"/v2/test/kits/manifests/latest-polyglot-containers-claude")
+	if c.Status != doctor.StatusWarn {
+		t.Errorf("status = %q, want WARN for 404 response", c.Status)
+	}
+	if !strings.Contains(c.Message, "not published yet") {
+		t.Errorf("message should mention 'not published yet', got: %q", c.Message)
+	}
+}
+
+// TestRegistryReachableCheck_AuthRequired verifies WARN + login suggestion for 401.
+func TestRegistryReachableCheck_AuthRequired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	c := doctor.DoRegistryProbeForTest("registry-reachable", "ghcr.io/test/kits",
+		"ghcr.io/test/kits:latest-polyglot-containers-claude", srv.URL+"/v2/test/kits/manifests/latest-polyglot-containers-claude")
+	if c.Status != doctor.StatusWarn {
+		t.Errorf("status = %q, want WARN for 401 response", c.Status)
+	}
+	if !strings.Contains(c.Message, "podman login") {
+		t.Errorf("message should mention 'podman login', got: %q", c.Message)
+	}
+}
+
+// TestRegistryReachableCheck_Unreachable verifies WARN when host is unreachable.
+func TestRegistryReachableCheck_Unreachable(t *testing.T) {
+	// Start a server and then close it immediately, so the connection is refused fast.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	addr := srv.URL
+	srv.Close() // closed — any connection attempt gets "connection refused"
+
+	c := doctor.DoRegistryProbeForTest("registry-reachable", "ghcr.invalid/test/kits",
+		"ghcr.invalid/test/kits:latest-polyglot-containers-claude",
+		addr+"/v2/test/kits/manifests/latest-polyglot-containers-claude")
+	if c.Status != doctor.StatusWarn {
+		t.Errorf("status = %q, want WARN for unreachable host", c.Status)
+	}
+	if !strings.Contains(strings.ToLower(c.Message), "unreachable") {
+		t.Errorf("message should mention 'unreachable', got: %q", c.Message)
+	}
+}
+
+// TestRegistryReachableCheck_InRun verifies the check appears in doctor.Run results.
+func TestRegistryReachableCheck_InRun(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	// Point at an unreachable address to keep the test fast.
+	cfg.Registry.Host = "ghcr.io/nklisch/agentbox-kits" // default; check should be present
+	cfg.Registry.Enabled = false                          // skip actual network call
+	result := doctor.Run(cfg)
+
+	c := findCheck(result, "registry-reachable")
+	if c == nil {
+		t.Fatal("registry-reachable check not found in doctor.Run output")
 	}
 }

@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/nklisch/agentbox/internal/builtinkits"
+	"github.com/nklisch/agentbox/internal/config"
 	"github.com/nklisch/agentbox/internal/exitcode"
 	"github.com/nklisch/agentbox/internal/kits"
 	"github.com/nklisch/agentbox/internal/version"
@@ -17,6 +19,7 @@ import (
 func newBuildCmd() *cobra.Command {
 	var (
 		noCache   bool
+		noPull    bool
 		printOnly bool
 		listOnly  bool
 		prune     bool
@@ -31,7 +34,7 @@ func newBuildCmd() *cobra.Command {
 				return err
 			}
 
-			b, err := newBuilder(res.Config.Runtime)
+			b, err := newBuilder(res.Config)
 			if err != nil {
 				return err
 			}
@@ -44,11 +47,12 @@ func newBuildCmd() *cobra.Command {
 			case printOnly:
 				return runBuildPrint(cmd, b, kitList(args, res.Config.DefaultKits))
 			default:
-				return runBuildBuild(cmd, b, kitList(args, res.Config.DefaultKits), noCache)
+				return runBuildBuild(cmd, b, kitList(args, res.Config.DefaultKits), noCache, noPull)
 			}
 		},
 	}
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "force a full rebuild (skips agentbox + podman caches)")
+	cmd.Flags().BoolVar(&noPull, "no-pull", false, "skip the registry pull attempt; build locally")
 	cmd.Flags().BoolVar(&printOnly, "print", false, "print the generated Dockerfile to stdout; do not build")
 	cmd.Flags().BoolVar(&listOnly, "list", false, "list all known kits and exit")
 	cmd.Flags().BoolVar(&prune, "prune", false, "remove kit images not referenced by any current box")
@@ -59,18 +63,23 @@ func newBuildCmd() *cobra.Command {
 // newBuilder wires the registry, cache, and runner into a Builder.
 // userKitsDir is empty string if unresolvable — non-fatal; the user just
 // hasn't authored any custom kits.
-func newBuilder(runtimeBin string) (*kits.Builder, error) {
+func newBuilder(cfg config.Config) (*kits.Builder, error) {
 	userKitsDir, _ := userKitsDirPath()
 	reg := kits.NewRegistry(builtinkits.FS(), userKitsDir)
 	cache, err := kits.NewCache()
 	if err != nil {
 		return nil, exitcode.Wrap(exitcode.Generic, err)
 	}
+	timeout, _ := time.ParseDuration(cfg.Registry.PullTimeout) // Validate() already accepted it
 	return &kits.Builder{
-		Registry: reg,
-		Cache:    cache,
-		Runner:   kits.NewPodmanRunner(runtimeBin),
-		Version:  version.Version,
+		Registry:        reg,
+		Cache:           cache,
+		Runner:          kits.NewPodmanRunner(cfg.Runtime),
+		Version:         version.Version,
+		RegistryEnabled: cfg.Registry.Enabled,
+		RegistryHost:    cfg.Registry.Host,
+		RegistryVerify:  cfg.Registry.Verify,
+		PullTimeout:     timeout,
 	}, nil
 }
 
@@ -129,12 +138,13 @@ func runBuildPrune(cmd *cobra.Command, b *kits.Builder) error {
 	return nil
 }
 
-func runBuildBuild(cmd *cobra.Command, b *kits.Builder, requested []string, noCache bool) error {
+func runBuildBuild(cmd *cobra.Command, b *kits.Builder, requested []string, noCache, noPull bool) error {
 	if len(requested) == 0 {
 		return exitcode.New(exitcode.InvalidArgs, "no kits requested and default_kits is empty")
 	}
 	res, err := b.Build(requested, kits.BuildOpts{
 		NoCache: noCache,
+		NoPull:  noPull,
 		Stdout:  cmd.OutOrStdout(),
 		Stderr:  cmd.ErrOrStderr(),
 	})
@@ -143,6 +153,10 @@ func runBuildBuild(cmd *cobra.Command, b *kits.Builder, requested []string, noCa
 	}
 	if res.CacheHit {
 		fmt.Fprintf(cmd.OutOrStdout(), "cache hit: %s (kits: %s)\n", res.Tag, strings.Join(res.Kits, ","))
+		return nil
+	}
+	if res.PullHit {
+		fmt.Fprintf(cmd.OutOrStdout(), "pulled: %s (kits: %s)\n", res.Tag, strings.Join(res.Kits, ","))
 		return nil
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "built: %s (kits: %s)\n", res.Tag, strings.Join(res.Kits, ","))

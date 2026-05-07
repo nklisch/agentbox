@@ -1,13 +1,17 @@
 package kits
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/nklisch/agentbox/internal/runspec"
 )
 
 // Runner abstracts the container runtime (podman/docker). The kits package
@@ -19,7 +23,53 @@ type Runner interface {
 	HasImage(tag string) (bool, error)
 	LiveImageRefs() ([]string, error)
 	RemoveImage(tag string) error
+
+	// Pull retrieves a remote image to the local store. Stdout/stderr are
+	// streamed for live progress; the timeout (if non-zero) bounds the
+	// operation. Returns a typed error on classifiable failure modes.
+	Pull(ctx PullContext) error
+
+	// Tag applies dst as an additional name for src. Used after a Pull to
+	// give the pulled remote ref the canonical local tag.
+	Tag(src, dst string) error
+
+	// Bin returns the runtime binary name ("podman" or "docker"); used for
+	// user-facing error messages.
+	Bin() string
 }
+
+// PullContext is the input to Runner.Pull.
+type PullContext struct {
+	Ref     string        // the full remote reference, e.g. ghcr.io/n/agentbox-kits:0.3.0-abc123
+	Timeout time.Duration // 0 = no timeout
+	Stdout  io.Writer
+	Stderr  io.Writer
+}
+
+// PullErrorKind classifies pull failures so the consumer can decide whether
+// to fall back silently (NotFound) or surface the failure (Auth, Network).
+type PullErrorKind int
+
+const (
+	PullErrorUnknown  PullErrorKind = iota
+	PullErrorNotFound               // 404 — image absent at that tag
+	PullErrorAuth                   // 401/403 — registry auth failure
+	PullErrorNetwork                // DNS, timeout, connection refused
+	PullErrorRuntime                // podman binary missing, etc.
+)
+
+// PullError is a typed error returned by Runner.Pull.
+type PullError struct {
+	Kind    PullErrorKind
+	Ref     string
+	Stderr  string
+	Wrapped error
+}
+
+func (e *PullError) Error() string {
+	return fmt.Sprintf("pull %s: %s", e.Ref, e.Wrapped.Error())
+}
+func (e *PullError) Unwrap() error { return e.Wrapped }
 
 // BuildContext is the input to Runner.Build.
 type BuildContext struct {
@@ -34,6 +84,7 @@ type BuildContext struct {
 // BuildOpts controls Builder.Build behavior.
 type BuildOpts struct {
 	NoCache bool
+	NoPull  bool      // skip the registry pull attempt unconditionally
 	Stdout  io.Writer // for podman build progress
 	Stderr  io.Writer
 }
@@ -42,6 +93,7 @@ type BuildOpts struct {
 type BuildResult struct {
 	Tag        string
 	CacheHit   bool
+	PullHit    bool   // image came from the registry
 	Dockerfile string
 	Kits       []string
 }
@@ -58,6 +110,13 @@ type Builder struct {
 	Cache    *Cache
 	Runner   Runner
 	Version  string // agentbox version (used in Dockerfile header + cache entry)
+
+	// Registry-pull plumbing. When RegistryHost is empty, the pull path is
+	// skipped (preserving pre-registry behavior for tests/legacy callers).
+	RegistryHost    string        // e.g. "ghcr.io/nklisch/agentbox-kits"; "" disables pull
+	RegistryEnabled bool          // mirrors cfg.Registry.Enabled
+	RegistryVerify  string        // "none" today
+	PullTimeout     time.Duration // 0 = no timeout
 }
 
 // PrintDockerfile resolves the kit list and returns the Dockerfile string
@@ -109,6 +168,37 @@ func (b *Builder) Build(requested []string, opts BuildOpts) (BuildResult, error)
 		}
 	}
 
+	// Try the registry path before doing a local build. Eligibility:
+	// - registry enabled
+	// - pull not explicitly suppressed for this call
+	// - NoCache not set (--no-cache forces a fresh local build)
+	// - all kits in the resolved list are built-in (not shadowed by user kits)
+	// - host is configured
+	if !opts.NoCache && b.RegistryEnabled && !opts.NoPull && b.RegistryHost != "" && AllBuiltin(res) {
+		pulled, perr := b.tryPullAndTag(res, opts)
+		if perr == nil && pulled {
+			result.PullHit = true
+			// Save cache entry so subsequent runs short-circuit on the cache.
+			hashes, herr := HashesFromResolved(res)
+			if herr != nil {
+				return result, fmt.Errorf("hash kits after pull: %w", herr)
+			}
+			entry := CacheEntry{
+				Tag:             res.Tag,
+				Kits:            res.Names(),
+				KitHashes:       hashes,
+				BuiltAt:         time.Now().UTC(),
+				AgentboxVersion: b.Version,
+				Source:          "registry",
+			}
+			if err := b.Cache.Save(entry, dockerfile); err != nil {
+				return result, fmt.Errorf("save cache after pull: %w", err)
+			}
+			return result, nil
+		}
+		// perr != nil: visibly logged inside tryPullAndTag; continue to local build.
+	}
+
 	ctxDir, cleanup, err := stageContext(res)
 	if err != nil {
 		return result, fmt.Errorf("stage build context: %w", err)
@@ -142,11 +232,67 @@ func (b *Builder) Build(requested []string, opts BuildOpts) (BuildResult, error)
 		KitHashes:       hashes,
 		BuiltAt:         time.Now().UTC(),
 		AgentboxVersion: b.Version,
+		Source:          "local",
 	}
 	if err := b.Cache.Save(entry, dockerfile); err != nil {
 		return result, fmt.Errorf("save cache: %w", err)
 	}
 	return result, nil
+}
+
+// tryPullAndTag attempts to pull the remote image and retag it with the
+// canonical local tag. Returns (true, nil) on success. Returns (false, nil)
+// when the pull failed in a way the consumer should silently fall back from
+// (NotFound). Returns (false, err) on classified failures the user should
+// see (Auth, Network) — the caller still falls back to local build, but
+// surfaces the wrapped error.
+func (b *Builder) tryPullAndTag(res Resolved, opts BuildOpts) (bool, error) {
+	ref := runspec.RemoteImageRef(b.RegistryHost, b.Version, res.Names())
+	if ref == "" {
+		return false, nil
+	}
+
+	fmt.Fprintf(opts.Stderr, "[registry] pulling %s\n", ref)
+	perr := b.Runner.Pull(PullContext{
+		Ref:     ref,
+		Timeout: b.PullTimeout,
+		Stdout:  opts.Stdout,
+		Stderr:  opts.Stderr,
+	})
+	if perr != nil {
+		var pe *PullError
+		if errors.As(perr, &pe) {
+			switch pe.Kind {
+			case PullErrorNotFound:
+				fmt.Fprintf(opts.Stderr, "[registry] no image at %s; building locally\n", ref)
+				return false, nil
+			case PullErrorAuth:
+				fmt.Fprintf(opts.Stderr,
+					"[registry] auth required for %s — try `%s login %s`; "+
+						"falling back to local build\n",
+					ref, b.Runner.Bin(), strings.SplitN(b.RegistryHost, "/", 2)[0])
+				return false, perr
+			case PullErrorNetwork:
+				fmt.Fprintf(opts.Stderr,
+					"[registry] network error pulling %s; falling back to local build\n", ref)
+				return false, perr
+			default:
+				fmt.Fprintf(opts.Stderr,
+					"[registry] pull failed (%s); falling back to local build\n", pe.Stderr)
+				return false, perr
+			}
+		}
+		return false, perr
+	}
+
+	if err := b.Runner.Tag(ref, res.Tag); err != nil {
+		// Tagging failed after a successful pull — odd. Don't claim a hit;
+		// fall back to building (which will succeed and overwrite the tag).
+		fmt.Fprintf(opts.Stderr, "[registry] retag %s -> %s failed: %v\n", ref, res.Tag, err)
+		return false, err
+	}
+	fmt.Fprintf(opts.Stderr, "[registry] pulled %s as %s\n", ref, res.Tag)
+	return true, nil
 }
 
 // Prune removes any agentbox/<tag> image not currently referenced by an

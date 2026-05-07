@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/nklisch/agentbox/internal/builtinkits"
 	"github.com/nklisch/agentbox/internal/config"
@@ -34,11 +35,16 @@ var newLifecycle = func(cfg config.Config) (*lifecycle.Lifecycle, error) {
 	if err != nil {
 		return nil, err
 	}
+	timeout, _ := time.ParseDuration(cfg.Registry.PullTimeout) // Validate() already accepted it
 	builder := &kits.Builder{
-		Registry: reg,
-		Cache:    cache,
-		Runner:   kits.NewPodmanRunner(cfg.Runtime),
-		Version:  version.Version,
+		Registry:        reg,
+		Cache:           cache,
+		Runner:          kits.NewPodmanRunner(cfg.Runtime),
+		Version:         version.Version,
+		RegistryEnabled: cfg.Registry.Enabled,
+		RegistryHost:    cfg.Registry.Host,
+		RegistryVerify:  cfg.Registry.Verify,
+		PullTimeout:     timeout,
 	}
 	// Determine whether to use sudo for iptables/ipset.
 	// On macOS, ipset/iptables enforcement is not available; Sudo is irrelevant

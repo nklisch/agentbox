@@ -10,7 +10,7 @@ set -euo pipefail
 # URLs and archive layouts were tested; notes are inline where they differ
 # from a naive guess.
 ZELLIJ_VERSION="${ZELLIJ_VERSION:-0.44.1}"       # zellij-org/zellij — musl only for linux
-STARSHIP_VERSION="${STARSHIP_VERSION:-1.25.1}"   # starship/starship
+STARSHIP_VERSION="${STARSHIP_VERSION:-1.25.1}"   # starship/starship — musl only for aarch64 linux
 EZA_VERSION="${EZA_VERSION:-0.23.4}"             # eza-community/eza — underscore before triple
 DUST_VERSION="${DUST_VERSION:-1.2.4}"            # bootandy/dust — v-prefix in archive name + subdir
 DUF_VERSION="${DUF_VERSION:-0.9.1}"              # muesli/duf — Go tool; uses x86_64 (not amd64) in tar.gz
@@ -63,7 +63,9 @@ curl -fsSL "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VER
   | tar -xz -C /usr/local/bin zellij
 
 # --- starship (shell prompt) ---
-curl -fsSL "https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/starship-${RUST_TRIPLE}.tar.gz" \
+# aarch64 only publishes a musl build (no gnu variant); musl also exists
+# for x86_64, so use MUSL_TRIPLE on both arches.
+curl -fsSL "https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/starship-${MUSL_TRIPLE}.tar.gz" \
   | tar -xz -C /usr/local/bin starship
 
 # --- eza (ls replacement) ---

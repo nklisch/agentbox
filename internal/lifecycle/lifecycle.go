@@ -53,9 +53,10 @@ type Lifecycle struct {
 
 // EnsureOpts controls box creation.
 type EnsureOpts struct {
-	Agent string   // overrides Cfg.DefaultAgent if non-empty
-	Kits  []string // overrides agent.Kits if non-empty
-	Fresh bool
+	Agent  string   // overrides Cfg.DefaultAgent if non-empty
+	Kits   []string // overrides agent.Kits if non-empty
+	Fresh  bool
+	NoPull bool // skip the registry pull attempt; build locally
 }
 
 // EnsureBox guarantees a running box exists for the current $PWD's project.
@@ -130,6 +131,7 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 
 	// Build (or cache-hit) the kit image.
 	buildRes, err := l.Builder.Build(chosenKits, kits.BuildOpts{
+		NoPull: opts.NoPull,
 		Stdout: l.Stdout,
 		Stderr: l.Stderr,
 	})
@@ -311,6 +313,7 @@ type RunOpts struct {
 	Network  string // override Cfg.Network.Mode for this run
 	NoZellij bool   // skip zellij and use bare-shell exec (only meaningful for Shell)
 	Layout   string // --layout flag value; empty falls back to cfg.Zellij.Layout
+	NoPull   bool   // skip the registry pull attempt; build locally
 }
 
 // Run is the high-level run command. Always writes the ModeRun layout so
@@ -342,7 +345,7 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 	// for the trail-wiring gate. Cleared after EnsureBox returns.
 	l.pendingLayoutName = spec.Name
 	box, err := l.EnsureBox(EnsureOpts{
-		Agent: opts.Agent, Kits: opts.Kits, Fresh: opts.Fresh,
+		Agent: opts.Agent, Kits: opts.Kits, Fresh: opts.Fresh, NoPull: opts.NoPull,
 	})
 	l.pendingLayoutName = "" // clear; ephemeral per-Run only
 	if err != nil {

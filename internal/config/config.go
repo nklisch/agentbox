@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Config is the merged agentbox configuration. Fields with zero values are
 // treated as "unset" by toml.Decode and left at their default if the file
@@ -16,7 +19,18 @@ type Config struct {
 	Containers   Containers       `toml:"containers" json:"containers"`
 	Shell        Shell            `toml:"shell" json:"shell"`
 	Zellij       Zellij           `toml:"zellij" json:"zellij"`
+	Registry     Registry         `toml:"registry" json:"registry"`
 	Agents       map[string]Agent `toml:"agents" json:"agents"`
+}
+
+// Registry holds the kit-image registry configuration. When Enabled and the
+// resolved kit list is composed entirely of built-in kits, agentbox tries to
+// pull the pre-built image from Host before building locally.
+type Registry struct {
+	Enabled     bool   `toml:"enabled" json:"enabled"`
+	Host        string `toml:"host" json:"host"`                 // e.g. "ghcr.io/nklisch/agentbox-kits"
+	Verify      string `toml:"verify" json:"verify"`             // "none" (v0.3+) | "cosign" (deferred)
+	PullTimeout string `toml:"pull_timeout" json:"pull_timeout"` // Go duration string, e.g. "5m"
 }
 
 type Network struct {
@@ -137,6 +151,12 @@ func DefaultConfig() Config {
 		Zellij: Zellij{
 			Layout: "focus",
 		},
+		Registry: Registry{
+			Enabled:     true,
+			Host:        "ghcr.io/nklisch/agentbox-kits",
+			Verify:      "none",
+			PullTimeout: "5m",
+		},
 		Agents: map[string]Agent{
 			"claude": {
 				Kits: []string{"polyglot", "claude"},
@@ -171,6 +191,21 @@ func (c Config) Validate() error {
 	case "off", "safe", "allowlist", "open":
 	default:
 		return fmt.Errorf("network.mode: must be off|safe|allowlist|open, got %q", c.Network.Mode)
+	}
+	switch c.Registry.Verify {
+	case "", "none":
+	case "cosign":
+		return fmt.Errorf("registry.verify: %q is reserved for a future release", c.Registry.Verify)
+	default:
+		return fmt.Errorf("registry.verify: must be 'none', got %q", c.Registry.Verify)
+	}
+	if c.Registry.Enabled && c.Registry.Host == "" {
+		return fmt.Errorf("registry.enabled=true requires registry.host to be set")
+	}
+	if c.Registry.PullTimeout != "" {
+		if _, err := time.ParseDuration(c.Registry.PullTimeout); err != nil {
+			return fmt.Errorf("registry.pull_timeout: %w", err)
+		}
 	}
 	return nil
 }

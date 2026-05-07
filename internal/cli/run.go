@@ -21,6 +21,7 @@ import (
 func newRunCmd() *cobra.Command {
 	var (
 		fresh        bool
+		noPull       bool
 		kitsFlag     string
 		networkFlag  string
 		layoutFlag   string
@@ -52,6 +53,7 @@ func newRunCmd() *cobra.Command {
 
 			opts := lifecycle.RunOpts{
 				Fresh:   fresh,
+				NoPull:  noPull,
 				Attach:  !noAttach,
 				Network: networkFlag,
 				Layout:  layoutFlag,
@@ -67,6 +69,7 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&fresh, "fresh", false, "remove any existing box for this project before creating")
+	cmd.Flags().BoolVar(&noPull, "no-pull", false, "skip the registry pull attempt; build locally")
 	cmd.Flags().StringVar(&kitsFlag, "kits", "", "override the kit list (comma-separated)")
 	cmd.Flags().StringVar(&networkFlag, "network", "", "override network.mode for this run")
 	cmd.Flags().StringVar(&layoutFlag, "layout", "",

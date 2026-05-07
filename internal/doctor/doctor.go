@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/nklisch/agentbox/internal/config"
 	"github.com/nklisch/agentbox/internal/kits"
@@ -77,6 +79,7 @@ func Run(cfg config.Config) Result {
 		sudoCheck(),
 		corednsImageCheck(cfg.Runtime),
 		containersConfigCheck(cfg),
+		registryReachableCheck(cfg),
 		podmanMachineCheck(),
 		kitCacheHealthCheck(cfg.Runtime),
 		mountSourcesCheck(cfg.Runtime),
@@ -330,6 +333,100 @@ func kitCacheHealthCheck(runtimeBin string) Check {
 	return Check{Name: name, Status: StatusWarn,
 		Message: fmt.Sprintf("%d cached kits reference %d missing images: %s. Run `agentbox build --no-cache <kit>` to rebuild.",
 			len(entries), len(stale), strings.Join(stale, ", "))}
+}
+
+// registryReachableCheck does a HEAD against the registry's manifests
+// endpoint for one well-known alias to confirm the registry is reachable
+// and the publisher is publishing. Warn-only on any failure — boxes still
+// build locally if the registry is offline.
+func registryReachableCheck(cfg config.Config) Check {
+	const name = "registry-reachable"
+	if !cfg.Registry.Enabled || cfg.Registry.Host == "" {
+		return Check{Name: name, Status: StatusOK,
+			Message: "registry pull disabled; skipping reachability check"}
+	}
+	// Probe the rolling alias for one published kit list.
+	probeRef := cfg.Registry.Host + ":latest-polyglot-containers-claude"
+	url, err := manifestProbeURL(probeRef)
+	if err != nil {
+		return Check{Name: name, Status: StatusWarn,
+			Message: fmt.Sprintf("could not derive probe URL: %v", err)}
+	}
+	return doRegistryProbe(name, cfg.Registry.Host, probeRef, url)
+}
+
+// doRegistryProbe performs the actual HTTP HEAD probe and returns the Check
+// result. Extracted so tests can inject a pre-built URL (e.g. from an httptest
+// server) without needing to run a TLS server.
+func doRegistryProbe(name, host, probeRef, probeURL string) Check {
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest(http.MethodHead, probeURL, nil)
+	if err != nil {
+		return Check{Name: name, Status: StatusWarn, Message: err.Error()}
+	}
+	req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return Check{Name: name, Status: StatusWarn,
+			Message: fmt.Sprintf("registry %s unreachable: %v (will fall back to local build)", host, err)}
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode == 200:
+		return Check{Name: name, Status: StatusOK,
+			Message: fmt.Sprintf("%s reachable; published images present", host)}
+	case resp.StatusCode == 404:
+		return Check{Name: name, Status: StatusWarn,
+			Message: fmt.Sprintf("%s reachable but %s not published yet (will fall back to local build)",
+				host, probeRef)}
+	case resp.StatusCode == 401 || resp.StatusCode == 403:
+		return Check{Name: name, Status: StatusWarn,
+			Message: fmt.Sprintf("%s requires auth (HTTP %d); try `podman login %s`",
+				host, resp.StatusCode, registryDomain(host))}
+	default:
+		return Check{Name: name, Status: StatusWarn,
+			Message: fmt.Sprintf("%s probe returned HTTP %d", host, resp.StatusCode)}
+	}
+}
+
+// manifestProbeURL converts an OCI ref like
+// "ghcr.io/nklisch/agentbox-kits:latest-polyglot-claude" into the v2
+// registry manifest URL: https://ghcr.io/v2/nklisch/agentbox-kits/manifests/latest-polyglot-claude
+func manifestProbeURL(ref string) (string, error) {
+	return manifestProbeURLWithScheme(ref, "https")
+}
+
+// manifestProbeURLWithScheme is like manifestProbeURL but allows the scheme
+// to be overridden. Used in tests to point at httptest servers.
+func manifestProbeURLWithScheme(ref, scheme string) (string, error) {
+	host, repo, tag, ok := splitOCIRef(ref)
+	if !ok {
+		return "", fmt.Errorf("malformed ref %q", ref)
+	}
+	return fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, host, repo, tag), nil
+}
+
+// splitOCIRef parses "ghcr.io/owner/repo:tag" into its three parts.
+func splitOCIRef(ref string) (host, repo, tag string, ok bool) {
+	colon := strings.LastIndex(ref, ":")
+	slash := strings.Index(ref, "/")
+	if colon <= 0 || slash < 0 || slash > colon {
+		return "", "", "", false
+	}
+	host = ref[:slash]
+	repo = ref[slash+1 : colon]
+	tag = ref[colon+1:]
+	return host, repo, tag, repo != "" && tag != ""
+}
+
+// registryDomain returns the domain portion of a host like
+// "ghcr.io/nklisch/agentbox-kits" -> "ghcr.io".
+func registryDomain(host string) string {
+	if i := strings.Index(host, "/"); i > 0 {
+		return host[:i]
+	}
+	return host
 }
 
 // mountSourcesCheck verifies that bind-mount sources for all agentbox-labeled
