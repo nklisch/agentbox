@@ -220,14 +220,11 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 	// Self-heal known agent-state sibling files: agentbox owns these mounts,
 	// and podman creates a missing bind-source as a *directory*, which would
 	// corrupt the mount. Touch the file empty if absent — Claude Code
-	// initializes it on first read.
+	// initializes it on first read. Best-effort: if create fails, proceed
+	// anyway (Claude Code will create it on first use).
 	if in.Agent == "claude" && in.HomeDir != "" {
 		p := filepath.Join(in.HomeDir, ".claude.json")
-		if _, statErr := os.Stat(p); errors.Is(statErr, os.ErrNotExist) {
-			if f, ferr := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o600); ferr == nil {
-				_ = f.Close()
-			}
-		}
+		_ = state.EnsureFile(p)
 	}
 
 	// Validate every bind-mount source exists on the host (exit 7 per CLI.md).

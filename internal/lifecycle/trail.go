@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/nklisch/agentbox/internal/state"
 )
 
 // trailEnabled reports whether the resolved (layoutName, agent) tuple
@@ -90,12 +92,8 @@ func MergeTrailHooks(userSettingsPath string) ([]byte, error) {
 // ~/.claude.json touch in lifecycle.go.
 func EnsureTrailFile(stateDir string) (string, error) {
 	p := filepath.Join(stateDir, "trail.jsonl")
-	if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
-		f, ferr := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o600)
-		if ferr != nil {
-			return "", ferr
-		}
-		_ = f.Close()
+	if err := state.EnsureFile(p); err != nil {
+		return "", err
 	}
 	return p, nil
 }

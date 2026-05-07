@@ -2,9 +2,7 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +13,7 @@ import (
 
 	"github.com/nklisch/agentbox/internal/config"
 	"github.com/nklisch/agentbox/internal/exitcode"
+	"github.com/nklisch/agentbox/internal/state"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -109,10 +108,8 @@ func newConfigEditCmd() *cobra.Command {
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return exitcode.Wrap(exitcode.Generic, err)
 			}
-			if _, err := os.Stat(target); errors.Is(err, fs.ErrNotExist) {
-				if err := os.WriteFile(target, []byte(""), 0o600); err != nil {
-					return exitcode.Wrap(exitcode.Generic, err)
-				}
+			if err := state.EnsureFile(target); err != nil {
+				return exitcode.Wrap(exitcode.Generic, err)
 			}
 			editor := os.Getenv("EDITOR")
 			if editor == "" {

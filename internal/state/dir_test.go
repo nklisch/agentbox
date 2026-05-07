@@ -137,3 +137,55 @@ func TestDir_ContainsAgentbox(t *testing.T) {
 		t.Errorf("Dir() = %q, expected to end with 'agentbox'", got)
 	}
 }
+
+func TestEnsureFile_CreatesIfMissing(t *testing.T) {
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, "newfile.txt")
+	if err := state.EnsureFile(p); err != nil {
+		t.Fatalf("EnsureFile() error: %v", err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("Stat after EnsureFile: %v", err)
+	}
+	if info.IsDir() {
+		t.Error("EnsureFile should create a regular file, not a directory")
+	}
+	if info.Size() != 0 {
+		t.Errorf("EnsureFile should create an empty file; got size %d", info.Size())
+	}
+}
+
+func TestEnsureFile_NoopIfExists(t *testing.T) {
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, "existing.txt")
+	if err := os.WriteFile(p, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.EnsureFile(p); err != nil {
+		t.Fatalf("EnsureFile on existing file error: %v", err)
+	}
+	// Content should be unchanged (EnsureFile is stat-create, not truncate).
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "content" {
+		t.Errorf("EnsureFile should not truncate existing file; got %q", got)
+	}
+}
+
+func TestEnsureFile_ErrorsIfDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "adir")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := state.EnsureFile(dir)
+	if err == nil {
+		t.Fatal("EnsureFile should return error when path is a directory")
+	}
+	if !strings.Contains(err.Error(), "directory") {
+		t.Errorf("error should mention 'directory', got: %v", err)
+	}
+}

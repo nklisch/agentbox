@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -32,6 +33,30 @@ func SessionDir(projectID string) (string, error) {
 // EnsureDir mkdir -p's path with mode 0700.
 func EnsureDir(path string) error {
 	return os.MkdirAll(path, 0o700)
+}
+
+// EnsureFile stat()s path; if the file does not exist, creates it as an
+// empty regular file with mode 0o600. Returns nil on success or if the file
+// already existed. Wraps unexpected errors (permission, parent-dir-missing).
+//
+// Used wherever a host path must exist as a regular file before a podman
+// bind-mount references it — podman silently creates missing bind sources
+// as directories, which corrupts the mount.
+func EnsureFile(path string) error {
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("ensure %s: exists but is a directory", path)
+		}
+		return nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	return nil
 }
 
 // IsWritable returns true if a file can be created in path. Path must exist
