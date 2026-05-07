@@ -1491,6 +1491,125 @@ func newBuilderWithRegistry(t *testing.T, runner *fakeRunner) *kits.Builder {
 }
 
 // ---------------------------------------------------------------------------
+// Unit 9 — EmitContext (builder.go)
+// ---------------------------------------------------------------------------
+
+// TestEmitContext_WritesDockerfileAndKits verifies the basic happy path: emit
+// to a fresh temp dir, confirm Dockerfile and at least one kit subdir exist.
+func TestEmitContext_WritesDockerfileAndKits(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilder(t, runner)
+
+	dst := t.TempDir()
+	// t.TempDir() returns a non-empty dir on some systems; remove it and let
+	// EmitContext re-create it so we always start from a truly absent path.
+	if err := os.RemoveAll(dst); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+
+	if err := b.EmitContext([]string{"base"}, dst); err != nil {
+		t.Fatalf("EmitContext: %v", err)
+	}
+
+	// Dockerfile must exist.
+	dfPath := filepath.Join(dst, "Dockerfile")
+	if _, err := os.Stat(dfPath); err != nil {
+		t.Errorf("Dockerfile not created: %v", err)
+	}
+
+	// kits/base/manifest.toml must exist (base is the only kit in the
+	// fakeRegistry built by newBuilder).
+	manifestPath := filepath.Join(dst, "kits", "base", "manifest.toml")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Errorf("kits/base/manifest.toml not created: %v", err)
+	}
+}
+
+// TestEmitContext_RefusesNonEmptyDir verifies that emitting into a non-empty
+// directory is rejected with an error containing "is not empty".
+func TestEmitContext_RefusesNonEmptyDir(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilder(t, runner)
+
+	dst := t.TempDir()
+	// Place a file to make it non-empty.
+	if err := os.WriteFile(filepath.Join(dst, "canary"), []byte("exists"), 0o644); err != nil {
+		t.Fatalf("WriteFile canary: %v", err)
+	}
+
+	err := b.EmitContext([]string{"base"}, dst)
+	if err == nil {
+		t.Fatal("expected error for non-empty dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "is not empty") {
+		t.Errorf("error should mention 'is not empty', got: %v", err)
+	}
+}
+
+// TestEmitContext_DockerfileMatchesPrint verifies that the Dockerfile written
+// by EmitContext is byte-identical to the output of Builder.PrintDockerfile.
+func TestEmitContext_DockerfileMatchesPrint(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilder(t, runner)
+
+	// Get expected Dockerfile via PrintDockerfile.
+	want, err := b.PrintDockerfile([]string{"base"})
+	if err != nil {
+		t.Fatalf("PrintDockerfile: %v", err)
+	}
+
+	dst := t.TempDir()
+	if err := os.RemoveAll(dst); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if err := b.EmitContext([]string{"base"}, dst); err != nil {
+		t.Fatalf("EmitContext: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dst, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("ReadFile Dockerfile: %v", err)
+	}
+	if string(got) != want {
+		t.Errorf("Dockerfile mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestEmitContext_EmptyDstErrors verifies that an empty dst string is rejected.
+func TestEmitContext_EmptyDstErrors(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilder(t, runner)
+
+	err := b.EmitContext([]string{"base"}, "")
+	if err == nil {
+		t.Fatal("expected error for empty dst, got nil")
+	}
+	if !strings.Contains(err.Error(), "dst is empty") {
+		t.Errorf("error should mention 'dst is empty', got: %v", err)
+	}
+}
+
+// TestEmitContext_NoRunnerCalled verifies EmitContext never calls the runner.
+func TestEmitContext_NoRunnerCalled(t *testing.T) {
+	runner := &fakeRunner{hasImage: map[string]bool{}}
+	b := newBuilder(t, runner)
+
+	dst := t.TempDir()
+	if err := os.RemoveAll(dst); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if err := b.EmitContext([]string{"base"}, dst); err != nil {
+		t.Fatalf("EmitContext: %v", err)
+	}
+	if len(runner.builds) != 0 {
+		t.Errorf("EmitContext must not call Runner.Build; got %d calls", len(runner.builds))
+	}
+	if len(runner.pullCalls) != 0 {
+		t.Errorf("EmitContext must not call Runner.Pull; got %d calls", len(runner.pullCalls))
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Ports & Adapters check — domain layer must not import cobra or internal/cli.
 // (Verified by the grep in the Makefile / CI; this test is a belt-and-suspenders
 // check at the package import level — if this test file compiles, the imports

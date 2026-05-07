@@ -1,0 +1,24 @@
+# Source of truth for which kit-list compositions are pre-built and
+# published to ghcr.io/nklisch/agentbox-kits on release.
+#
+# Each entry describes a tuple of:
+#   nickname  — human-readable suffix on the alias tags
+#   kits      — comma-separated kit list (matching the `agentbox build` arg)
+#
+# The version-pinned, sha-pinned tag (consumed by the CLI) is computed at
+# publish time. The aliases (nickname-suffixed) are also published for
+# human-driven `podman pull`.
+#
+# To add a new published kit list: add an entry here AND add a matching
+# entry to the matrix.include block in .github/workflows/kit-images.yml.
+# The `verify-matrix` step in that workflow will fail the build if the two
+# fall out of sync.
+images:
+  - nickname: polyglot-containers-claude
+    kits: polyglot,containers,claude
+  - nickname: polyglot-containers-codex
+    kits: polyglot,containers,codex
+  - nickname: polyglot-claude
+    kits: polyglot,claude
+  - nickname: node-claude
+    kits: node,claude

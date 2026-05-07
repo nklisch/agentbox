@@ -1,0 +1,171 @@
+name: kit-images
+
+# Builds multi-arch (linux/amd64 + linux/arm64) kit-list images and pushes
+# them to ghcr.io/nklisch/agentbox-kits. Triggered on every v* tag (in
+# lockstep with release.yml) and via workflow_dispatch for re-publishing
+# without a new tag.
+#
+# Each published image carries three tags:
+#   <version>-<sha12>      — version-pinned, sha-pinned (CLI lookup target; immutable)
+#   <version>-<nickname>   — version-pinned, human-readable (immutable)
+#   latest-<nickname>      — rolling, reassigned on each release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to build under (e.g. v0.3.0). Required for manual runs.'
+        required: true
+
+# GITHUB_TOKEN needs packages:write to push to GHCR. contents:read for checkout.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      # Let all matrix legs run even if one fails — a broken polyglot build
+      # shouldn't block node-claude from shipping.
+      fail-fast: false
+      matrix:
+        # The canonical source of truth is .github/published-kits.yml.
+        # GitHub Actions cannot read external files into a matrix at runtime,
+        # so the list is duplicated here. The `verify-matrix` step below
+        # guards against drift — it fails the job if the two disagree.
+        # When adding a new kit list: update BOTH this matrix AND published-kits.yml.
+        include:
+          - nickname: polyglot-containers-claude
+            kits: polyglot,containers,claude
+          - nickname: polyglot-containers-codex
+            kits: polyglot,containers,codex
+          - nickname: polyglot-claude
+            kits: polyglot,claude
+          - nickname: node-claude
+            kits: node,claude
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Full history so `git rev-parse --short HEAD` picks up the actual
+          # commit SHA (shallow clone would give a wrong short-sha).
+          fetch-depth: 0
+
+      # Resolve the version string once and expose it as a step output so all
+      # subsequent steps reference a single source of truth.
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # Strip the refs/tags/ prefix from the git ref, e.g. v0.3.0.
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Guard: fail loudly if .github/published-kits.yml and the matrix above
+      # have drifted. yq is preinstalled on ubuntu-latest runners.
+      # This runs per-matrix-leg so the error message names the specific entry
+      # that disagrees, making the fix obvious without reading a diff.
+      - name: Verify matrix matches published-kits.yml
+        shell: bash
+        run: |
+          declare -A from_yaml
+          while IFS=$'\t' read -r nick kits; do
+            from_yaml[$nick]=$kits
+          done < <(yq -r '.images[] | [.nickname, .kits] | @tsv' .github/published-kits.yml)
+
+          matrix_nick="${{ matrix.nickname }}"
+          matrix_kits="${{ matrix.kits }}"
+          yaml_kits="${from_yaml[$matrix_nick]}"
+
+          if [ "$yaml_kits" != "$matrix_kits" ]; then
+            echo "::error::Matrix entry '$matrix_nick' has kits='$matrix_kits' but .github/published-kits.yml has '$yaml_kits'. Update one to match the other." >&2
+            exit 1
+          fi
+          echo "Matrix entry '$matrix_nick' matches published-kits.yml ✓"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Build the agentbox CLI with the same ldflags the release workflow uses.
+      # The embedded version string becomes part of the Dockerfile header comment
+      # and (critically) the version component of the remote image tag via
+      # RemoteImageRef — so it must match the published release version.
+      - name: Build agentbox CLI
+        shell: bash
+        run: |
+          go build \
+            -ldflags "-s -w \
+              -X github.com/nklisch/agentbox/internal/version.Version=${{ steps.version.outputs.version }} \
+              -X github.com/nklisch/agentbox/internal/version.Commit=$(git rev-parse --short HEAD) \
+              -X github.com/nklisch/agentbox/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o ./agentbox \
+            ./cmd/agentbox
+
+      # Stage the build context to disk so docker buildx can consume it via
+      # --context. This calls agentbox's resolver + Dockerfile generator, so
+      # the context is byte-identical to what a local `agentbox build` produces.
+      #
+      # --print-tag returns the sha12 portion of the local image tag
+      # (agentbox/<sha12>). We strip the prefix and use the hex as the
+      # version-pinned component of the GHCR tag, matching what the CLI will
+      # compute at pull time via RemoteImageRef.
+      - name: Emit build context
+        id: emit
+        shell: bash
+        run: |
+          ./agentbox build --emit-context ./build-ctx ${{ matrix.kits }}
+
+          # Compute the sha12 portion of the image tag. --print-tag emits
+          # "agentbox/<sha12>" on stdout; strip the "agentbox/" prefix.
+          sha12=$(./agentbox build --print-tag ${{ matrix.kits }} | sed 's|agentbox/||')
+          echo "sha12=${sha12}" >> "$GITHUB_OUTPUT"
+
+      # QEMU registers binfmt_misc handlers so the amd64 runner can execute
+      # arm64 binaries. Required for the linux/arm64 platform leg.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # Buildx creates a multi-platform builder instance. The default docker
+      # driver doesn't support --push, so we need the docker-container driver.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build and push a multi-arch manifest. Three tags per image:
+      #   1. <version>-<sha12>       — deterministic, matches CLI's RemoteImageRef lookup
+      #   2. <version>-<nickname>    — human-readable for manual pulls
+      #   3. latest-<nickname>       — rolling alias for "give me the newest"
+      #
+      # cache-from/cache-to are scoped per nickname so the polyglot-claude
+      # cache doesn't pollute node-claude's layer cache (they share base layers
+      # but the GHA cache backend can't merge scopes cleanly).
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v7
+        with:
+          context: ./build-ctx
+          file: ./build-ctx/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/agentbox-kits:${{ steps.version.outputs.version }}-${{ steps.emit.outputs.sha12 }}
+            ghcr.io/${{ github.repository_owner }}/agentbox-kits:${{ steps.version.outputs.version }}-${{ matrix.nickname }}
+            ghcr.io/${{ github.repository_owner }}/agentbox-kits:latest-${{ matrix.nickname }}
+          # Per-nickname cache scope avoids cross-contamination between kit lists.
+          cache-from: type=gha,scope=${{ matrix.nickname }}
+          cache-to:   type=gha,scope=${{ matrix.nickname }},mode=max

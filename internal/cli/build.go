@@ -18,11 +18,13 @@ import (
 
 func newBuildCmd() *cobra.Command {
 	var (
-		noCache   bool
-		noPull    bool
-		printOnly bool
-		listOnly  bool
-		prune     bool
+		noCache     bool
+		noPull      bool
+		printOnly   bool
+		printTag    bool
+		listOnly    bool
+		prune       bool
+		emitContext string
 	)
 	cmd := &cobra.Command{
 		Use:   "build [kit_list]",
@@ -46,6 +48,10 @@ func newBuildCmd() *cobra.Command {
 				return runBuildPrune(cmd, b)
 			case printOnly:
 				return runBuildPrint(cmd, b, kitList(args, res.Config.DefaultKits))
+			case printTag:
+				return runBuildPrintTag(cmd, b, kitList(args, res.Config.DefaultKits))
+			case emitContext != "":
+				return runBuildEmitContext(cmd, b, kitList(args, res.Config.DefaultKits), emitContext)
 			default:
 				return runBuildBuild(cmd, b, kitList(args, res.Config.DefaultKits), noCache, noPull)
 			}
@@ -54,9 +60,12 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "force a full rebuild (skips agentbox + podman caches)")
 	cmd.Flags().BoolVar(&noPull, "no-pull", false, "skip the registry pull attempt; build locally")
 	cmd.Flags().BoolVar(&printOnly, "print", false, "print the generated Dockerfile to stdout; do not build")
+	cmd.Flags().BoolVar(&printTag, "print-tag", false, "print the resolved image tag (agentbox/<sha>) to stdout; do not build")
 	cmd.Flags().BoolVar(&listOnly, "list", false, "list all known kits and exit")
 	cmd.Flags().BoolVar(&prune, "prune", false, "remove kit images not referenced by any current box")
-	cmd.MarkFlagsMutuallyExclusive("print", "list", "prune")
+	cmd.Flags().StringVar(&emitContext, "emit-context", "",
+		"stage the build context (Dockerfile + kit dirs) to <dir> instead of building")
+	cmd.MarkFlagsMutuallyExclusive("print", "list", "prune", "emit-context", "print-tag")
 	return cmd
 }
 
@@ -123,6 +132,33 @@ func runBuildPrint(cmd *cobra.Command, b *kits.Builder, requested []string) erro
 		return exitcode.Wrap(exitcode.KitBuild, err)
 	}
 	fmt.Fprint(cmd.OutOrStdout(), df)
+	return nil
+}
+
+// runBuildPrintTag prints only the resolved image tag (agentbox/<sha12>), one
+// line, no trailing content. Used by CI to compute the version-pinned GHCR tag
+// without grepping through the Dockerfile output.
+func runBuildPrintTag(cmd *cobra.Command, b *kits.Builder, requested []string) error {
+	if len(requested) == 0 {
+		return exitcode.New(exitcode.InvalidArgs, "no kits requested and default_kits is empty")
+	}
+	tag, err := b.ResolveForTag(requested)
+	if err != nil {
+		return exitcode.Wrap(exitcode.KitBuild, err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), tag)
+	return nil
+}
+
+// runBuildEmitContext stages the build context (Dockerfile + kit dirs) to dst.
+func runBuildEmitContext(cmd *cobra.Command, b *kits.Builder, requested []string, dst string) error {
+	if len(requested) == 0 {
+		return exitcode.New(exitcode.InvalidArgs, "no kits requested and default_kits is empty")
+	}
+	if err := b.EmitContext(requested, dst); err != nil {
+		return exitcode.Wrap(exitcode.KitBuild, err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "context emitted to %s\n", dst)
 	return nil
 }
 

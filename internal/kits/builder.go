@@ -129,6 +129,18 @@ func (b *Builder) PrintDockerfile(requested []string) (string, error) {
 	return GenerateDockerfile(res, b.Version), nil
 }
 
+// ResolveForTag resolves the kit list and returns the canonical local image
+// tag (agentbox/<sha12>) without building or staging anything. Used by
+// --print-tag so CI can compute the version-pinned GHCR tag without grepping
+// through Dockerfile output.
+func (b *Builder) ResolveForTag(requested []string) (string, error) {
+	res, err := Resolve(b.Registry, requested)
+	if err != nil {
+		return "", err
+	}
+	return res.Tag, nil
+}
+
 // Build resolves the requested kit list, checks the cache, generates a
 // Dockerfile, stages a build context, and invokes the Runner. Returns a
 // BuildResult describing what happened.
@@ -329,6 +341,19 @@ func (b *Builder) Prune() (PruneResult, error) {
 	return PruneResult{Removed: removed, Kept: kept}, nil
 }
 
+// stageInto copies the resolved kit dirs into <dst>/kits/<name>/. Used by
+// both stageContext (live builds) and EmitContext (CI build contexts).
+// dst must already exist; individual kit subdirs are created as needed.
+func stageInto(dst string, res Resolved) error {
+	for _, k := range res.Kits {
+		kitDst := filepath.Join(dst, "kits", k.Manifest.Name)
+		if err := copyFS(k.FS, kitDst); err != nil {
+			return fmt.Errorf("stage kit %q: %w", k.Manifest.Name, err)
+		}
+	}
+	return nil
+}
+
 // stageContext writes res's kits to a fresh temp dir as kits/<name>/<files>.
 // Returns the dir path and a cleanup function (which removes the dir on success
 // or failure — callers defer it).
@@ -338,14 +363,48 @@ func stageContext(res Resolved) (string, func(), error) {
 		return "", nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
-	for _, k := range res.Kits {
-		dst := filepath.Join(dir, "kits", k.Manifest.Name)
-		if err := copyFS(k.FS, dst); err != nil {
-			cleanup()
-			return "", nil, fmt.Errorf("stage kit %q: %w", k.Manifest.Name, err)
-		}
+	if err := stageInto(dir, res); err != nil {
+		cleanup()
+		return "", nil, err
 	}
 	return dir, cleanup, nil
+}
+
+// EmitContext stages the resolved build context to dst (created if absent).
+// Writes:
+//
+//	<dst>/Dockerfile
+//	<dst>/kits/<name>/...    (one subdir per resolved kit)
+//
+// dst must not exist or must be empty — refuses to overwrite existing files
+// to avoid surprise. Does not invoke the container runner; it is a pure
+// staging primitive for CI (docker buildx build --push).
+func (b *Builder) EmitContext(requested []string, dst string) error {
+	if dst == "" {
+		return fmt.Errorf("emit-context: dst is empty")
+	}
+	// Check whether dst exists and is non-empty.
+	if entries, err := os.ReadDir(dst); err == nil && len(entries) > 0 {
+		return fmt.Errorf("emit-context: %s is not empty", dst)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("emit-context: stat %s: %w", dst, err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+
+	res, err := Resolve(b.Registry, requested)
+	if err != nil {
+		return err
+	}
+	dockerfile := GenerateDockerfile(res, b.Version)
+
+	// Stage kit dirs. Reuses the same copyFS the temp-dir build path uses,
+	// so the on-disk layout matches what the runner sees (DRY).
+	if err := stageInto(dst, res); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dst, "Dockerfile"), []byte(dockerfile), 0o644)
 }
 
 // copyFS recursively copies srcFS rooted at "." into dst on disk. Preserves
