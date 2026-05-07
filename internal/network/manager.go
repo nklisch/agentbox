@@ -271,7 +271,7 @@ func writeCorefile(spec Spec) error {
 	// CoreDNS runs as nonroot:nonroot; in rootless podman, the container user
 	// won't map to the host file owner, so the file must be group/world-readable.
 	// The Corefile contains no secrets — only DNS forwarding configuration.
-	return os.WriteFile(filepath.Join(dir, "Corefile"), []byte(body), 0o644)
+	return os.WriteFile(state.CorefilePath(dir), []byte(body), 0o644)
 }
 
 // subnetFromProjectID returns "10.89.<X>.0/24" where X is the first byte of

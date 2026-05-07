@@ -84,13 +84,12 @@ func EnsureSession(projectID string) (string, error) {
 		return "", err
 	}
 	// Create the saved/ subdir so the bind mount source exists before podman starts.
-	if err := EnsureDir(filepath.Join(dir, "saved")); err != nil {
+	if err := EnsureDir(SavedDirPath(dir)); err != nil {
 		return "", err
 	}
 	// Touch files that are bind-mounted by runspec; podman fails to mount a
 	// non-existent source even for ro mounts.
-	for _, name := range []string{"history", "layout.kdl", "effective-config.toml"} {
-		p := filepath.Join(dir, name)
+	for _, p := range []string{HistoryPath(dir), LayoutPath(dir), EffectiveConfigPath(dir)} {
 		if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
 			if err := os.WriteFile(p, nil, 0o600); err != nil {
 				return "", err
@@ -110,6 +109,16 @@ func RemoveSession(projectID string) error {
 	return os.RemoveAll(dir)
 }
 
+// Per-session file paths under <sessionDir>. Use these helpers rather than
+// inlining the filenames so all references update together.
+func HistoryPath(sessionDir string) string         { return filepath.Join(sessionDir, "history") }
+func LayoutPath(sessionDir string) string          { return filepath.Join(sessionDir, "layout.kdl") }
+func EffectiveConfigPath(sessionDir string) string { return filepath.Join(sessionDir, "effective-config.toml") }
+func SavedDirPath(sessionDir string) string        { return filepath.Join(sessionDir, "saved") }
+func TrailPath(sessionDir string) string           { return filepath.Join(sessionDir, "trail.jsonl") }
+func ClaudeSettingsPath(sessionDir string) string  { return filepath.Join(sessionDir, "claude-settings.json") }
+func CorefilePath(sessionDir string) string        { return filepath.Join(sessionDir, "Corefile") }
+
 // WriteEffectiveConfig writes the merged config to <state-dir>/sessions/<id>/effective-config.toml.
 // The file is mounted ro into the box at /etc/agentbox/config.toml.
 func WriteEffectiveConfig(projectID string, body []byte) error {
@@ -120,5 +129,5 @@ func WriteEffectiveConfig(projectID string, body []byte) error {
 	if err := EnsureDir(dir); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "effective-config.toml"), body, 0o600)
+	return os.WriteFile(EffectiveConfigPath(dir), body, 0o600)
 }

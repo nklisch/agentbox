@@ -301,7 +301,7 @@ func writeLayoutFor(
 	if err := state.EnsureDir(dir); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "layout.kdl"), []byte(body), 0o600)
+	return os.WriteFile(state.LayoutPath(dir), []byte(body), 0o600)
 }
 
 // writeLayout is a thin shim used for shell-mode and attach-without-spec paths.
@@ -600,7 +600,7 @@ func (l *Lifecycle) Attach(input string) error {
 	// Regenerate the layout only when the file is empty or missing (e.g. if the
 	// box was started via --no-attach before P4 wrote it).
 	if sessionDir, serr := state.SessionDir(projID); serr == nil {
-		layoutPath := filepath.Join(sessionDir, "layout.kdl")
+		layoutPath := state.LayoutPath(sessionDir)
 		if info, ferr := os.Stat(layoutPath); ferr != nil || info.Size() == 0 {
 			agent := box.Agent
 			a, ok := l.Cfg.Agents[agent]

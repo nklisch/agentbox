@@ -10,6 +10,7 @@ import (
 
 	"github.com/nklisch/agentbox/internal/config"
 	"github.com/nklisch/agentbox/internal/paths"
+	"github.com/nklisch/agentbox/internal/state"
 )
 
 // Mount is a single bind mount.
@@ -289,10 +290,10 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 	// Session state dir mounts (shell history, layout, effective config, saved/).
 	if in.StateDir != "" {
 		args.Mounts = append(args.Mounts,
-			Mount{Source: in.StateDir + "/history", Target: "/root/.local/share/agentbox-history", Mode: "rw"},
-			Mount{Source: in.StateDir + "/layout.kdl", Target: "/etc/agentbox/layout.kdl", Mode: "ro"},
-			Mount{Source: in.StateDir + "/effective-config.toml", Target: "/etc/agentbox/config.toml", Mode: "ro"},
-			Mount{Source: in.StateDir + "/saved", Target: "/root/.local/share/agentbox-saved", Mode: "rw"},
+			Mount{Source: state.HistoryPath(in.StateDir), Target: "/root/.local/share/agentbox-history", Mode: "rw"},
+			Mount{Source: state.LayoutPath(in.StateDir), Target: "/etc/agentbox/layout.kdl", Mode: "ro"},
+			Mount{Source: state.EffectiveConfigPath(in.StateDir), Target: "/etc/agentbox/config.toml", Mode: "ro"},
+			Mount{Source: state.SavedDirPath(in.StateDir), Target: "/root/.local/share/agentbox-saved", Mode: "rw"},
 		)
 	}
 	// Extra mounts ("<src>:<dst>:<mode>"). Validation deferred to a later phase.

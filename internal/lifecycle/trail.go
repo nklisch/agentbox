@@ -91,7 +91,7 @@ func MergeTrailHooks(userSettingsPath string) ([]byte, error) {
 // which would corrupt the mount). Follows the same self-heal pattern as the
 // ~/.claude.json touch in lifecycle.go.
 func EnsureTrailFile(stateDir string) (string, error) {
-	p := filepath.Join(stateDir, "trail.jsonl")
+	p := state.TrailPath(stateDir)
 	if err := state.EnsureFile(p); err != nil {
 		return "", err
 	}
@@ -111,7 +111,7 @@ func WriteShadowSettings(stateDir, hostHome string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out := filepath.Join(stateDir, "claude-settings.json")
+	out := state.ClaudeSettingsPath(stateDir)
 	if err := os.WriteFile(out, body, 0o600); err != nil {
 		return "", err
 	}

@@ -2,6 +2,7 @@ package network
 
 import (
 	"github.com/nklisch/agentbox/internal/runspec"
+	"github.com/nklisch/agentbox/internal/state"
 )
 
 // CoreDNSImage is the pinned CoreDNS image used as the sidecar.
@@ -39,7 +40,7 @@ func BuildSidecar(in SidecarInput) runspec.PodmanCreateArgs {
 		},
 		Mounts: []runspec.Mount{
 			// Corefile at /Corefile — CoreDNS default config path (workdir is /).
-			{Source: in.StateDir + "/Corefile", Target: "/Corefile", Mode: "ro"},
+			{Source: state.CorefilePath(in.StateDir), Target: "/Corefile", Mode: "ro"},
 		},
 		Network: in.Spec.NetworkName,
 		// Static IP so the agentbox container's --dns flag can always find the
