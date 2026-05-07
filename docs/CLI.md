@@ -81,6 +81,7 @@ agentbox run [agent] [flags]
 | `--network <mode>`  | Override `network.mode` for this run.                       |
 | `--layout <name>`   | Zellij layout to use: `focus` (default), `reviewer`, `auditor`, or a custom name. Overrides `[zellij].layout` config. Exit code 2 if the name is not a built-in and no file exists at `~/.config/agentbox/layouts/<name>.kdl`. See [docs/LAYOUTS.md](LAYOUTS.md). |
 | `--no-attach`       | Create/start the box but don't attach (for scripting).      |
+| `--no-pull`         | Skip the registry pull attempt; build locally. Useful when iterating on a custom kit or when you want to force a clean local build. Threaded through to the builder via `lifecycle.RunOpts.NoPull`. |
 | `--detach-on-exit`  | Stop the container when the agent process exits (default: keep running). |
 
 **Behavior:** see ARCHITECTURE.md "agentbox run lifecycle." TL;DR: ensures a per-project
@@ -253,19 +254,35 @@ agentbox build [kit_list] [flags]
 
 **Flags:**
 
-| Flag           | Behavior                                                            |
-| -------------- | ------------------------------------------------------------------- |
-| `--no-cache`   | Force a full rebuild. Skips both agentbox's cache and podman's layer cache. |
-| `--print`      | Print the generated Dockerfile to stdout. Don't build.              |
-| `--list`       | List all known kits (built-in + user-authored) and exit.            |
-| `--prune`      | Remove kit images not referenced by any current box.                |
+| Flag                      | Behavior                                                            |
+| ------------------------- | ------------------------------------------------------------------- |
+| `--emit-context <dir>`    | Stage the build context (Dockerfile + kit dirs) to `<dir>` instead of building. Refuses to write into a non-empty dir. Used by CI to hand the context to `docker buildx build --push` for multi-arch publishing. |
+| `--list`                  | List all known kits (built-in + user-authored) and exit.            |
+| `--no-cache`              | Force a full rebuild. Skips both agentbox's cache and podman's layer cache. |
+| `--no-pull`               | Skip the registry pull attempt; build locally. Useful when iterating on a custom kit or forcing a clean local build. |
+| `--print`                 | Print the generated Dockerfile to stdout. Don't build.              |
+| `--print-tag`             | Print the deterministic local tag (`agentbox/<sha[:12]>`) for the resolved kit list, without building. Used by CI to compute the remote tag suffix. |
+| `--prune`                 | Remove kit images not referenced by any current box.                |
+
+`--emit-context`, `--list`, `--print`, `--print-tag`, and `--prune` are mutually exclusive with each other. Cobra rejects any combination with exit code 2.
+
+**Behavior:**
+
+On a cache miss, `agentbox build` tries the registry before building locally. If `[registry] enabled = true`, `--no-pull` was not passed, and every kit in the resolved list is a built-in (none are user-authored or shadow a built-in), the CLI attempts `podman pull <host>:<version>-<sha[:12]>`. On success it retags the pulled image as the canonical local tag (`agentbox/<sha[:12]>`), writes a cache entry with `source = "registry"`, and returns without invoking the local builder.
+
+On any pull failure (404 not found, 401/403 auth, network timeout/DNS error, or unknown), the CLI logs the failure to stderr as `[registry] ...` and falls back to a local build. Pull failure never aborts the build. Auth failures include a `podman login <host>` suggestion.
+
+User kits — including user kits that shadow a built-in by name — disable the pull path entirely. The full resolved kit list must be built-in for registry pull to be eligible.
 
 **Examples:**
 
 ```sh
-agentbox build                            # build default_kits
+agentbox build                            # build default_kits (pulls from registry if eligible)
 agentbox build polyglot,cloud,claude
+agentbox build polyglot,claude --no-pull  # skip registry; build locally
 agentbox build --print polyglot,go        # inspect the generated Dockerfile
+agentbox build --print-tag polyglot,claude  # print agentbox/<sha> without building
+agentbox build --emit-context /tmp/ctx polyglot,claude  # stage context for docker buildx
 agentbox build --no-cache base
 agentbox build --prune
 ```
@@ -280,18 +297,26 @@ agentbox doctor [flags]
 
 Checks (run in order; each prints `[OK]`, `[WARN]`, or `[FAIL]`):
 
-| # | Check name          | What it verifies                                                              |
-|---|---------------------|-------------------------------------------------------------------------------|
-| 1 | `runtime`           | `podman` or `docker` is on PATH and responds to `version`.                    |
-| 2 | `state-dir`         | `~/.local/share/agentbox/` exists and is writable.                           |
-| 3 | `iptables`          | (Linux) `iptables` is installed.                                              |
-| 4 | `ipset`             | (Linux) `ipset` is installed.                                                 |
-| 5 | `sudo-iptables`     | (Linux) Passwordless `sudo iptables` and `sudo ipset` work. Required for `safe`/`allowlist` modes. |
-| 6 | `coredns-image`     | `docker.io/coredns/coredns:1.14.3` is present locally.                       |
-| 7 | `containers-config` | WARN when `containers` kit is in `default_kits` but `containers.enable=false`. |
-| 8 | `podman-machine`    | (macOS) A `podman machine` is running.                                        |
-| 9 | `kit-cache`         | Cache JSON entries match real images in the podman image store.               |
-|10 | `mount-sources`     | Each running box's bind-mount sources still exist on the host.                |
+| #  | Check name             | What it verifies                                                              |
+|----|------------------------|-------------------------------------------------------------------------------|
+|  1 | `runtime`              | `podman` or `docker` is on PATH and responds to `version`.                    |
+|  2 | `state-dir`            | `~/.local/share/agentbox/` exists and is writable.                           |
+|  3 | `iptables`             | (Linux) `iptables` is installed.                                              |
+|  4 | `ipset`                | (Linux) `ipset` is installed.                                                 |
+|  5 | `sudo-iptables`        | (Linux) Passwordless `sudo iptables` and `sudo ipset` work. Required for `safe`/`allowlist` modes. |
+|  6 | `coredns-image`        | `docker.io/coredns/coredns:1.14.3` is present locally.                       |
+|  7 | `containers-config`    | WARN when `containers` kit is in `default_kits` but `containers.enable=false`. |
+|  8 | `registry-reachable`   | WARN-only. HEAD probe against GHCR's manifest endpoint for the `latest-polyglot-containers-claude` alias. Skipped when `[registry] enabled = false`. Results: OK (reachable + alias published), WARN "not published yet" (404), WARN "auth required" (401/403 — try `podman login ghcr.io`), WARN "unreachable" (network failure). See note below. |
+|  9 | `podman-machine`       | (macOS) A `podman machine` is running.                                        |
+| 10 | `kit-cache`            | Cache JSON entries match real images in the podman image store.               |
+| 11 | `mount-sources`        | Each running box's bind-mount sources still exist on the host.                |
+
+**Note on `registry-reachable` and GHCR auth:** GHCR's OCI manifest endpoint requires
+bearer-token negotiation that `podman pull` handles transparently but a plain HTTP HEAD
+does not. As a result, this check returns WARN "auth required" against `ghcr.io` even
+when anonymous `podman pull` of public images works fine. This is a doctor-only quirk;
+the actual `agentbox build` pull path is unaffected. If the check returns "auth required"
+but your builds succeed, the setup is correct.
 
 Exits 0 if all checks pass, 1 if any check FAIL.
 

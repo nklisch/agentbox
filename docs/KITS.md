@@ -156,6 +156,9 @@ Where `joined_resolved_list` is the resolved list joined with `+`. Example:
 
 Stable. Same kit list = same tag, regardless of input order.
 
+`agentbox build --print-tag <kit_list>` prints the resolved tag without building — useful
+for scripting or computing the corresponding remote tag.
+
 ### Generated Dockerfile
 
 ```dockerfile
@@ -218,6 +221,53 @@ mixing both caches just adds confusion).
 
 `agentbox build --prune` removes any `agentbox/<tag>` image not referenced by a current
 container.
+
+### Registry pull
+
+On a cache miss, `agentbox build` (and `agentbox run` via the same path) tries to pull a
+pre-built image from the registry before building locally. The pull path is active when:
+
+- `[registry] enabled = true` (the default).
+- `--no-pull` was not passed.
+- **Every kit in the resolved list is a built-in** — none are user-authored and none shadow
+  a built-in by name. "Built-in kits are read-only; user kits shadow built-ins by name."
+  A single user kit anywhere in the resolved list (including one pulled in transitively via
+  `depends_on`) disables the pull path for the whole list.
+
+When eligible, the CLI runs `podman pull <host>:<version>-<sha[:12]>`, retags the pulled
+image as the canonical local tag (`agentbox/<sha[:12]>`), and writes a cache entry with
+`source = "registry"`. Subsequent builds short-circuit on the cache entry — no repeated
+network calls.
+
+On any pull failure (404 not found, 401/403 auth, network timeout/DNS, or unknown), the
+CLI logs the failure to stderr as `[registry] ...` and falls back to a local build. Pull
+failure never aborts the build. Auth failures include a `podman login <host>` suggestion.
+
+Pass `--no-pull` to skip the registry attempt unconditionally and build locally. Useful
+when iterating on a custom kit or when you want to force a fresh local build.
+
+#### Pre-published kit images
+
+The project publishes four kit-list compositions to `ghcr.io/nklisch/agentbox-kits` on
+every `v*` release, for `linux/amd64` and `linux/arm64`:
+
+| Kit list (pass to `--kits`)   | GHCR nickname                      |
+| ----------------------------- | ---------------------------------- |
+| `polyglot,containers,claude`  | `polyglot-containers-claude`       |
+| `polyglot,containers,codex`   | `polyglot-containers-codex`        |
+| `polyglot,claude`             | `polyglot-claude`                  |
+| `node,claude`                 | `node-claude`                      |
+
+Each image is published under three tag aliases:
+
+- `<version>-<sha[:12]>` — the CLI's deterministic lookup; immutable.
+- `<version>-<nickname>` — versioned alias for human `podman pull`.
+- `latest-<nickname>` — rolling alias, reassigned each release.
+
+The source of truth for which compositions are published is
+`.github/published-kits.yml`. Adding a new pre-published composition is a one-PR change
+to that file. For full design details see
+[`docs/features/registry-images.design.md`](features/registry-images.design.md).
 
 ## Default kit catalog
 
@@ -394,7 +444,9 @@ agentbox run --kits polyglot,work,claude
   starts from `debian:bookworm-slim` + base. You can author a kit that replaces base
   conceptually, but you can't change the FROM.
 - **Built-in kits are read-only.** A user kit with the same name as a built-in shadows the
-  built-in. Use this to override behavior.
+  built-in. Use this to override behavior. Note: any user kit in the resolved list
+  (including one that shadows a built-in) disables the registry pull path — the whole list
+  is built locally.
 - **Image size adds up.** `polyglot + containers + cloud + claude` is genuinely 6-7GB. The
   cache makes that a one-time cost per kit-list, but it's there. Use lean kits (`node +
   claude` etc.) when you don't need the kitchen sink.
