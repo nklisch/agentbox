@@ -61,12 +61,20 @@ jobs:
         id: version
         shell: bash
         run: |
+          # Take the raw input (workflow_dispatch) or git ref (push), then
+          # strip BOTH the refs/tags/ prefix and the leading v so the published
+          # tag is `0.4.0-<sha>`, not `v0.4.0-<sha>`. The CLI's RemoteImageRef
+          # also strips the v before composing its lookup ref, so without this
+          # the published tag and the CLI's lookup tag mismatch, every pull
+          # 404s, and consumers fall back to local build silently. This also
+          # matches goreleaser's binary-tarball naming convention (e.g.
+          # agentbox_0.4.0_linux_amd64.tar.gz, no v).
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            raw="${{ inputs.version }}"
           else
-            # Strip the refs/tags/ prefix from the git ref, e.g. v0.3.0.
-            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            raw="${GITHUB_REF#refs/tags/}"
           fi
+          echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
 
       # Guard: fail loudly if .github/published-kits.yml and the matrix above
       # have drifted. yq is preinstalled on ubuntu-latest runners.
