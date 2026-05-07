@@ -59,6 +59,7 @@ var newLifecycle = func(cfg config.Config) (*lifecycle.Lifecycle, error) {
 			Runtime:      rt,
 			IPTables:     &network.IPTables{Sudo: sudoIPTables},
 			NetfilterBin: "agentbox-netfilter",
+			Stderr:       os.Stderr,
 		},
 		Home:   home,
 		Quiet:  global.Quiet,

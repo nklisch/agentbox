@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,15 @@ type Manager struct {
 	Runtime      container.Runtime
 	IPTables     *IPTables // nil means iptables enforcement is disabled
 	NetfilterBin string    // path/name of agentbox-netfilter binary; defaults to "agentbox-netfilter"
+	Stderr       io.Writer // nil → io.Discard; populated by Lifecycle factory
+}
+
+// stderrOf returns m.Stderr or io.Discard if unset.
+func (m *Manager) stderrOf() io.Writer {
+	if m.Stderr == nil {
+		return io.Discard
+	}
+	return m.Stderr
 }
 
 // SpecFor builds a Spec for the given project + config.
@@ -108,7 +118,7 @@ func (m *Manager) Setup(spec Spec) (Info, error) {
 		if spec.Mode == ModeAllowlist {
 			if err := m.IPTables.PrePopulate(spec, spec.Cfg.Network.Allowlist.Allow); err != nil {
 				// Best-effort: log but don't abort setup.
-				fmt.Fprintf(os.Stderr, "warning: allowlist prepopulate: %v\n", err)
+				fmt.Fprintf(m.stderrOf(), "warning: allowlist prepopulate: %v\n", err)
 			}
 		}
 		if err := m.startNetfilterDaemon(spec); err != nil {
@@ -207,7 +217,7 @@ func (m *Manager) startNetfilterDaemon(spec Spec) error {
 	pidFile := filepath.Join(stateDir, "netfilter.pid")
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		// Non-fatal: daemon is running; we just can't signal it cleanly later.
-		fmt.Fprintf(os.Stderr, "warning: write netfilter.pid: %v\n", err)
+		fmt.Fprintf(m.stderrOf(), "warning: write netfilter.pid: %v\n", err)
 	}
 
 	// Release the process handle — we don't want to reap it.
