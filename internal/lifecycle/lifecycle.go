@@ -19,6 +19,7 @@ import (
 	"github.com/nklisch/agentbox/internal/exitcode"
 	"github.com/nklisch/agentbox/internal/kits"
 	"github.com/nklisch/agentbox/internal/network"
+	"github.com/nklisch/agentbox/internal/paths"
 	"github.com/nklisch/agentbox/internal/project"
 	"github.com/nklisch/agentbox/internal/runspec"
 	"github.com/nklisch/agentbox/internal/seccomp"
@@ -199,12 +200,7 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 	// bind-mounted rw, and the symlink targets are bind-mounted rw too.
 	if agent == "claude" && l.Home != "" {
 		if cfgSrc, ok := l.Cfg.Mounts.AgentConfigs[agent]; ok && cfgSrc != "" {
-			claudeDir := cfgSrc
-			if strings.HasPrefix(claudeDir, "~/") {
-				claudeDir = filepath.Join(l.Home, claudeDir[2:])
-			} else if claudeDir == "~" {
-				claudeDir = l.Home
-			}
+			claudeDir := paths.ExpandHome(cfgSrc, l.Home)
 			targets, err := CollectExternalSymlinkTargets(claudeDir)
 			if err != nil {
 				fmt.Fprintf(l.Stderr, "warning: scan %s for external symlinks: %v\n", claudeDir, err)

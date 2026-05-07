@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nklisch/agentbox/internal/config"
-	"github.com/nklisch/agentbox/internal/project"
+	"github.com/nklisch/agentbox/internal/paths"
 )
 
 // Mount is a single bind mount.
@@ -68,6 +68,18 @@ type BuildInput struct {
 	// otherwise. Lifecycle is responsible for the gate decision.
 	TrailHostPath          string // <state>/trail.jsonl; bound rw to /etc/agentbox/trail.jsonl
 	ClaudeSettingsHostPath string // <state>/claude-settings.json; shadow-mounted ro over /root/.claude/settings.json
+
+	// ExtraSamePathMounts is a list of host paths to bind-mount at the SAME
+	// path inside the container (the project's same-path-mount philosophy).
+	// Used for live-resolving external symlink targets discovered inside
+	// agent config dirs (e.g. ~/.claude/skills/<name> symlinked to
+	// ~/.agents/skills/<name>): mounting the resolved target at its same
+	// host path lets the preserved symlink resolve cleanly inside the box,
+	// without copying and without losing host↔box live sync.
+	//
+	// Mounts are emitted rw and deduplicated. Lifecycle is responsible for
+	// the discovery; runspec only emits the mount entries.
+	ExtraSamePathMounts []string
 }
 
 // RemoteImageRef returns the canonical GHCR reference for a resolved kit
@@ -130,14 +142,14 @@ func NetworkArg(cfg config.Config, projectID string) string {
 	case "open":
 		return "bridge"
 	default: // safe, allowlist
-		return project.NetworkName(projectID)
+		return "agentbox-net-" + projectID
 	}
 }
 
 // BuildPodmanCreateArgs assembles the full args from config + input.
 func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, error) {
 	args := PodmanCreateArgs{
-		Name:    project.ContainerName(in.ProjectID),
+		Name:    "agentbox-" + in.ProjectID,
 		Workdir: in.ProjectAbs,
 		CPUs:    cfg.Resources.CPUs,
 		Memory:  cfg.Resources.Memory,
@@ -204,12 +216,31 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 	}
 	// Agent config dir for the resolved agent only.
 	if src, ok := cfg.Mounts.AgentConfigs[in.Agent]; ok && src != "" {
-		expanded := expandHome(src, in.HomeDir)
+		expanded := paths.ExpandHome(src, in.HomeDir)
 		args.Mounts = append(args.Mounts, Mount{
 			Source: expanded,
 			Target: "/root/." + in.Agent,
 			Mode:   "rw",
 		})
+	}
+	// Extra same-path mounts for external symlink targets (e.g. global
+	// skills/plugins symlinked into ~/.claude from outside). Lifecycle
+	// discovers these; runspec just emits the bind-mount entries. Each
+	// path is mounted at its own host path inside the container so that
+	// preserved symlinks under ~/.claude resolve cleanly. Deduped.
+	{
+		seen := map[string]bool{}
+		for _, p := range in.ExtraSamePathMounts {
+			if p == "" || seen[p] {
+				continue
+			}
+			seen[p] = true
+			args.Mounts = append(args.Mounts, Mount{
+				Source: p,
+				Target: p,
+				Mode:   "rw",
+			})
+		}
 	}
 	// Claude Code stores state in two places: the directory ~/.claude/
 	// (settings, plugins) AND the sibling file ~/.claude.json (project
@@ -360,17 +391,6 @@ func (p PodmanCreateArgs) ToShell(runtime string) string {
 	return b.String()
 }
 
-// expandHome replaces a leading "~" with homeDir.
-func expandHome(s, homeDir string) string {
-	if strings.HasPrefix(s, "~/") && homeDir != "" {
-		return homeDir + s[1:]
-	}
-	if s == "~" && homeDir != "" {
-		return homeDir
-	}
-	return s
-}
-
 // parseExtraMount parses "<src>:<dst>:<mode>" with ~ expansion on src.
 func parseExtraMount(spec, homeDir string) (Mount, error) {
 	parts := strings.Split(spec, ":")
@@ -382,7 +402,7 @@ func parseExtraMount(spec, homeDir string) (Mount, error) {
 		return Mount{}, fmt.Errorf("mode must be rw or ro, got %q", mode)
 	}
 	return Mount{
-		Source: expandHome(parts[0], homeDir),
+		Source: paths.ExpandHome(parts[0], homeDir),
 		Target: parts[1],
 		Mode:   mode,
 	}, nil
