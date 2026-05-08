@@ -79,7 +79,7 @@ func upstreamForwardLine(s config.NetworkSafe) (string, bool) {
 			return "", false
 		}
 		// NextDNS recommended plain-DNS addresses for profile routing.
-		return fmt.Sprintf("  forward . 45.90.28.0 45.90.30.0 {\n    policy random\n  }"), true
+		return "  forward . 45.90.28.0 45.90.30.0 {\n    policy random\n  }", true
 	case "custom":
 		if len(s.UpstreamServers) == 0 {
 			return "", false

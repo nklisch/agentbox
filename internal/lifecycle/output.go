@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"fmt"
-	"io"
 )
 
 // info writes an informational message to l.Stderr (not Stdout — primary
@@ -19,13 +18,4 @@ func (l *Lifecycle) info(format string, args ...any) {
 // status chatter, not warnings about partial failures.
 func (l *Lifecycle) warn(format string, args ...any) {
 	fmt.Fprintf(l.Stderr, format+"\n", args...)
-}
-
-// stderrOf returns l.Stderr if non-nil, else io.Discard. Used for handing a
-// writer to lower-level helpers that always need a non-nil writer.
-func (l *Lifecycle) stderrOf() io.Writer {
-	if l.Stderr == nil {
-		return io.Discard
-	}
-	return l.Stderr
 }

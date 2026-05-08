@@ -42,14 +42,6 @@ func fakeBaseFS() fs.FS {
 	return fakeKitFS(baseManifest, emptyPackages, minimalInstall, minimalEnv)
 }
 
-// fakeKitFSNamed returns a valid fs.FS for a named (non-base) kit.
-func fakeKitFSNamed(name string) fs.FS {
-	manifest := `name = "` + name + `"
-description = "A test kit named ` + name + `"
-`
-	return fakeKitFS(manifest, emptyPackages, minimalInstall, minimalEnv)
-}
-
 // fakeRegistry creates a Registry backed by an in-memory builtin FS with the
 // given named kits. Each kit in the map is a valid kit with a minimal manifest.
 // The "base" kit is special and receives a base-specific manifest.
@@ -143,10 +135,7 @@ func TestLoad_InvalidName(t *testing.T) {
 }
 
 func TestLoad_InvalidName_Numeric(t *testing.T) {
-	// Name must start with alphanumeric — single digit is valid.
-	_, err := kits.Load("1foo", fakeBaseFS(), "test")
-	// "1foo" starts with a digit, which is valid per the regex [a-z0-9][a-z0-9_-]*
-	// However, the manifest name is "base" so it won't match — let's use "1foo" manifest.
+	// Name must start with alphanumeric per the regex [a-z0-9][a-z0-9_-]*
 	fsys := fakeKitFS(`name = "1foo"
 description = "numeric start"
 `, "", minimalInstall, minimalEnv)

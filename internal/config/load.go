@@ -79,8 +79,3 @@ func decodeIfExists(path string, cfg *Config) error {
 	return nil
 }
 
-// EnsureGlobalDir mkdir -p's the parent dir of paths.Global with 0700.
-// Used by `config edit --global` to create the file on first edit.
-func EnsureGlobalDir(p Paths) error {
-	return os.MkdirAll(filepath.Dir(p.Global), 0o700)
-}
