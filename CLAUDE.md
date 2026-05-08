@@ -52,6 +52,6 @@ These move fast — verify against current sources, don't guess from memory:
 - Podman / Docker CLI flags (network, security-opt, seccomp)
 - CoreDNS plugins and Corefile syntax
 - Zellij KDL layout schema
-- Agent CLIs and their YOLO/permission flags (Claude Code, Codex, opencode)
+- Agent CLIs and their YOLO/permission flags (Claude Code, Codex, opencode), and the claude-mode wrapper's preset names and flag passthrough rules
 - `@anthropic-ai/claude-code`, `@openai/codex` package names and install paths
 - Claude Code hook event schemas (`settings.json` hook format, payload field names — `tool_response` not `tool_result`; Stop events have `last_assistant_message` not `reason`). Load-bearing for the trail system.

@@ -285,7 +285,7 @@ Built-in kits, shipped with the binary. All except `base` set `depends_on = ["ba
 | `systems`    | clang, lld, cmake, ninja, gdb, lldb, valgrind. For native / FFI work.      |
 | `cloud`      | aws-cli, gcloud, az, terraform, kubectl, helm.                             |
 | `containers` | Rootless podman, buildah, skopeo, podman-compose, docker-compose. Aliases `docker → podman` and configures the docker-compatibility socket so `docker compose` v2 works. **Requires `containers.enable = true`** in the host config — the kit installs the binaries; the host CLI grants the runtime relaxations (see SPEC.md). |
-| `claude`     | `@anthropic-ai/claude-code` (npm). Implicitly `depends_on = ["base", "node"]`. |
+| `claude`     | `@anthropic-ai/claude-code` (npm) + `claude-mode` static binary (system-prompt wrapper). Implicitly `depends_on = ["base", "node"]`. |
 | `codex`      | `@openai/codex` (npm). Implicitly `depends_on = ["base", "node"]`.         |
 | `opencode`   | opencode binary. `depends_on = ["base"]`.                                  |
 

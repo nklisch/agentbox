@@ -80,6 +80,7 @@ agentbox run [agent] [flags]
 | `--kits <list>`     | Override the kit list (comma-separated). Implies `--fresh` if the resolved kit_image differs. |
 | `--network <mode>`  | Override `network.mode` for this run.                       |
 | `--layout <name>`   | Zellij layout to use: `focus` (default), `reviewer`, `auditor`, or a custom name. Overrides `[zellij].layout` config. Exit code 2 if the name is not a built-in and no file exists at `~/.config/agentbox/layouts/<name>.kdl`. See [docs/LAYOUTS.md](LAYOUTS.md). |
+| `--mode <preset>`   | Wrap `claude` in `claude-mode <preset>` so the agent runs under a behaviorally-tuned system prompt. Built-in presets: `create`, `extend`, `safe`, `refactor`, `explore`, `debug`, `methodical`, `director`, `partner`, `none`. User-defined presets in `.claude-mode.json` are also accepted. Claude agent only — pairing with another agent exits 2. |
 | `--no-attach`       | Create/start the box but don't attach (for scripting).      |
 | `--no-pull`         | Skip the registry pull attempt; build locally. Useful when iterating on a custom kit or when you want to force a clean local build. Threaded through to the builder via `lifecycle.RunOpts.NoPull`. |
 | `--detach-on-exit`  | Stop the container when this session ends (default: keep running for `agentbox attach`). |
@@ -111,6 +112,7 @@ agentbox run --network off             # no network for this run
 agentbox run --no-attach               # spin up, don't attach
 agentbox run --layout reviewer         # live diff + test runner panes
 agentbox run --layout auditor          # live Claude tool-call trail pane
+agentbox run --mode safe               # surgical-precision system prompt
 ```
 
 ### `agentbox shell`

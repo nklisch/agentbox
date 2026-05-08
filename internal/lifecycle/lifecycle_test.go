@@ -1284,6 +1284,109 @@ func TestRun_FocusClaude_NoTrailMount(t *testing.T) {
 	}
 }
 
+// ── claude-mode integration tests ────────────────────────────────────────────
+
+func TestRun_ModeRewritesAgentCmdInLayout(t *testing.T) {
+	cr := newCaptureRuntime()
+	cfg := defaultTestCfg()
+	cfg.Agents["claude"] = config.Agent{
+		Kits: []string{"base"},
+		Cmd:  []string{"claude", "--dangerously-skip-permissions"},
+	}
+	projID, _ := setupProject(t)
+	isolateState(t)
+
+	l := newCaptureLifecycle(t, cr, cfg)
+	err := l.Run(lifecycle.RunOpts{Attach: false, Agent: "claude", Mode: "create"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	dir, err := state.SessionDir(projID)
+	if err != nil {
+		t.Fatalf("state.SessionDir: %v", err)
+	}
+	kdl, err := os.ReadFile(state.LayoutPath(dir))
+	if err != nil {
+		t.Fatalf("read layout.kdl: %v", err)
+	}
+
+	// focusLayout prepends "box-agent" to agentCmd, making the slice:
+	// ["box-agent", "claude-mode", "create", "--dangerously-skip-permissions"]
+	// writeCommand then emits: command "box-agent" \n args "claude-mode" "create" ...
+	if !strings.Contains(string(kdl), `command "box-agent"`) {
+		t.Errorf("layout.kdl missing 'command \"box-agent\"':\n--- got ---\n%s", string(kdl))
+	}
+	wantArgs := `args "claude-mode" "create" "--dangerously-skip-permissions"`
+	if !strings.Contains(string(kdl), wantArgs) {
+		t.Errorf("layout.kdl missing %q:\n--- got ---\n%s", wantArgs, string(kdl))
+	}
+}
+
+func TestRun_ModeWithCodex_Errors(t *testing.T) {
+	cr := newCaptureRuntime()
+	cfg := defaultTestCfg()
+	cfg.Agents["codex"] = config.Agent{
+		Kits: []string{"base"},
+		Cmd:  []string{"codex", "--dangerously-bypass-approvals-and-sandbox"},
+	}
+	setupProject(t)
+	isolateState(t)
+
+	l := newCaptureLifecycle(t, cr, cfg)
+	err := l.Run(lifecycle.RunOpts{Attach: false, Agent: "codex", Mode: "create"})
+	var ee *exitcode.Err
+	if !errors.As(err, &ee) || ee.Code != exitcode.InvalidArgs {
+		t.Fatalf("expected *exitcode.Err{Code:InvalidArgs}, got %T %v", err, err)
+	}
+	if !strings.Contains(ee.Error(), "claude") || !strings.Contains(ee.Error(), "codex") {
+		t.Errorf("error message should reference both 'claude' and 'codex': %s", ee.Error())
+	}
+}
+
+func TestRun_NoMode_LayoutUnchanged(t *testing.T) {
+	// Regression guard: with Mode:"" the agent pane command is byte-identical
+	// to today's output. Catches accidental always-on rewrites.
+	cr := newCaptureRuntime()
+	cfg := defaultTestCfg()
+	cfg.Agents["claude"] = config.Agent{
+		Kits: []string{"base"},
+		Cmd:  []string{"claude", "--dangerously-skip-permissions"},
+	}
+	projID, _ := setupProject(t)
+	isolateState(t)
+
+	l := newCaptureLifecycle(t, cr, cfg)
+	err := l.Run(lifecycle.RunOpts{Attach: false, Agent: "claude"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	dir, err := state.SessionDir(projID)
+	if err != nil {
+		t.Fatalf("state.SessionDir: %v", err)
+	}
+	kdl, err := os.ReadFile(state.LayoutPath(dir))
+	if err != nil {
+		t.Fatalf("read layout.kdl: %v", err)
+	}
+
+	// focusLayout prepends "box-agent", so the slice is:
+	// ["box-agent", "claude", "--dangerously-skip-permissions"]
+	// writeCommand emits: command "box-agent" \n args "claude" "--dangerously-skip-permissions"
+	if !strings.Contains(string(kdl), `command "box-agent"`) {
+		t.Errorf("layout.kdl missing 'command \"box-agent\"':\n--- got ---\n%s", string(kdl))
+	}
+	wantArgs := `args "claude" "--dangerously-skip-permissions"`
+	if !strings.Contains(string(kdl), wantArgs) {
+		t.Errorf("layout.kdl missing baseline %q:\n--- got ---\n%s", wantArgs, string(kdl))
+	}
+	// Negative: claude-mode tokens must NOT appear.
+	if strings.Contains(string(kdl), "claude-mode") {
+		t.Errorf("layout.kdl unexpectedly contains 'claude-mode' with Mode unset:\n%s", string(kdl))
+	}
+}
+
 func TestRun_AuditorNonClaude_NoTrailMount(t *testing.T) {
 	cr := newCaptureRuntime()
 	cfg := defaultTestCfg()

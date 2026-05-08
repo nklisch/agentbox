@@ -27,6 +27,7 @@ func newRunCmd() *cobra.Command {
 		kitsFlag     string
 		networkFlag  string
 		layoutFlag   string
+		modeFlag     string
 		noAttach     bool
 		detachOnExit bool
 	)
@@ -40,7 +41,7 @@ func newRunCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return runDryRun(cmd, res, args, kitsFlag, networkFlag, layoutFlag)
+				return runDryRun(cmd, res, args, kitsFlag, networkFlag, layoutFlag, modeFlag)
 			}
 
 			l, _, err := initLifecycleCmd(cmd)
@@ -59,6 +60,7 @@ func newRunCmd() *cobra.Command {
 				Attach:       !noAttach,
 				Network:      networkFlag,
 				Layout:       layoutFlag,
+				Mode:         modeFlag,
 				DetachOnExit: detachOnExit,
 			}
 			if len(args) == 1 {
@@ -76,13 +78,15 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&networkFlag, "network", "", "override network.mode for this run")
 	cmd.Flags().StringVar(&layoutFlag, "layout", "",
 		"zellij layout name (focus|reviewer|auditor|<custom>); overrides [zellij].layout config")
+	cmd.Flags().StringVar(&modeFlag, "mode", "",
+		"claude-mode preset (create|extend|safe|refactor|explore|debug|methodical|director|partner|none|<config-defined>); claude agent only")
 	cmd.Flags().BoolVar(&noAttach, "no-attach", false, "create/start the box but don't attach")
 	cmd.Flags().BoolVar(&detachOnExit, "detach-on-exit", false, "stop the container when this session ends (default: keep running for `agentbox attach`)")
 	return cmd
 }
 
 // runDryRun preserves Phase 1's dry-run behavior. Extracted so RunE stays clean.
-func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, networkFlag, layoutFlag string) error {
+func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, networkFlag, layoutFlag, modeFlag string) error {
 	// Apply per-command overrides.
 	c := cfg.Config
 	if networkFlag != "" {
@@ -99,6 +103,11 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 	a, ok := c.Agents[agent]
 	if !ok {
 		return exitcode.New(exitcode.InvalidArgs, "agent %q not defined in [agents.*]", agent)
+	}
+
+	// Validate --mode before any other work so dry-run errors mirror live-run.
+	if _, err := lifecycle.BuildAgentCmd(a.Cmd, modeFlag); err != nil {
+		return err
 	}
 
 	kitList := a.Kits
@@ -174,6 +183,9 @@ func runDryRun(cmd *cobra.Command, cfg configResult, args []string, kitsFlag, ne
 		fmt.Fprintf(cmd.OutOrStdout(), "# resolved = %s\n", strings.Join(resolved.Names(), ","))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "# network = %s\n", c.Network.Mode)
+	if modeFlag != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "# mode = %s\n", modeFlag)
+	}
 	if spec.Kind == zellij.LayoutCustom {
 		fmt.Fprintf(cmd.OutOrStdout(), "# layout = %s (%s, %s)\n", spec.Name, spec.Kind, spec.Path)
 	} else {

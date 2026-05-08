@@ -181,6 +181,72 @@ func TestRunUnknownAgent(t *testing.T) {
 	}
 }
 
+// ---- claude-mode dry-run tests ----
+
+func TestRunDryRun_Mode_AddsHeader(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	out, _, err := runCmd(t, "run", "--mode", "create", "--dry-run")
+	if err != nil {
+		t.Fatalf("run --mode create --dry-run: %v", err)
+	}
+	if !strings.Contains(out, "# mode = create\n") {
+		t.Errorf("dry-run output missing '# mode = create' header:\n%s", out)
+	}
+}
+
+func TestRunDryRun_ModeWithCodex_Errors(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	// Write a project-local config with a codex agent.
+	if err := os.WriteFile(filepath.Join(tmp, ".agentbox.toml"), []byte(`
+[agents.codex]
+kits = ["polyglot", "codex"]
+cmd  = ["codex", "--dangerously-bypass-approvals-and-sandbox"]
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	_, _, err := runCmd(t, "run", "codex", "--mode", "create", "--dry-run")
+	var ee *exitcode.Err
+	if !errors.As(err, &ee) || ee.Code != exitcode.InvalidArgs {
+		t.Fatalf("expected *exitcode.Err{Code:InvalidArgs}, got %T %v", err, err)
+	}
+}
+
+func TestRunDryRun_NoMode_NoHeader(t *testing.T) {
+	// Regression: without --mode, the '# mode = …' line must NOT appear.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	out, _, err := runCmd(t, "run", "--dry-run")
+	if err != nil {
+		t.Fatalf("run --dry-run: %v", err)
+	}
+	if strings.Contains(out, "# mode") {
+		t.Errorf("dry-run output unexpectedly contains '# mode' header:\n%s", out)
+	}
+}
+
 // ---- Phase 3 integration tests using fakeLifecycle seam ----
 
 // fakeRuntime is the same test double used here for CLI-level tests.

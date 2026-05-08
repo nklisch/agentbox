@@ -331,6 +331,7 @@ type RunOpts struct {
 	Network      string // override Cfg.Network.Mode for this run
 	NoZellij     bool   // skip zellij and use bare-shell exec (only meaningful for Shell)
 	Layout       string // --layout flag value; empty falls back to cfg.Zellij.Layout
+	Mode         string // --mode flag: claude-mode preset (create|safe|...). Empty = no claude-mode wrapping. Claude-only.
 	NoPull       bool   // skip the registry pull attempt; build locally
 	DetachOnExit bool   // stop the container after the user's session ends
 }
@@ -370,6 +371,13 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 		return exitcode.New(exitcode.InvalidArgs, "agent %q not defined", agent)
 	}
 
+	// Apply --mode rewrite. BuildAgentCmd validates the agent is "claude"
+	// when mode is non-empty and returns *exitcode.Err on failure.
+	agentCmd, err := BuildAgentCmd(a.Cmd, opts.Mode)
+	if err != nil {
+		return err
+	}
+
 	// Write the layout BEFORE EnsureBox so the bind-mount source at
 	// <state>/layout.kdl has its final content at the moment podman create
 	// runs. Critical on macOS Podman, where the bind mount goes through the
@@ -385,7 +393,7 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 	if perr != nil {
 		return exitcode.Wrap(exitcode.Generic, perr)
 	}
-	if err := writeLayoutFor(projID, projAbs, spec, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell, ""); err != nil {
+	if err := writeLayoutFor(projID, projAbs, spec, zellij.ModeRun, agentCmd, l.Cfg.Shell.Shell, ""); err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
 
@@ -405,7 +413,7 @@ func (l *Lifecycle) Run(opts RunOpts) error {
 	// box.CWD is canonical for the existing container). This is also a
 	// refresh path for `agentbox attach .` reconnecting later — Linux still
 	// benefits from the rewrite if config changed since first create.
-	if err := writeLayoutFor(box.ProjectID, box.CWD, spec, zellij.ModeRun, a.Cmd, l.Cfg.Shell.Shell, ""); err != nil {
+	if err := writeLayoutFor(box.ProjectID, box.CWD, spec, zellij.ModeRun, agentCmd, l.Cfg.Shell.Shell, ""); err != nil {
 		return exitcode.Wrap(exitcode.Generic, err)
 	}
 
