@@ -126,6 +126,11 @@ kits = ["polyglot", "opencode"]
 cmd  = ["opencode"]                # no root-level YOLO flag; see Open / deferred
 ```
 
+When `--mode <preset>` is passed to `agentbox run`, the resolved agent command is rewritten at
+run time: `["claude", ...]` becomes `["claude-mode", "<preset>", ...]`. This rewrite is
+claude-only — pairing `--mode` with any other agent exits 2 with a clear error. The `cmd` field
+in config is never mutated; the rewrite is ephemeral, applied in `lifecycle.BuildAgentCmd`.
+
 ## Mount semantics
 
 Same-path bind mount is non-negotiable: `-v $PWD:$PWD -w $PWD`. Error messages, lockfiles,

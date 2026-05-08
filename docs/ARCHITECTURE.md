@@ -226,6 +226,12 @@ agentbox run [agent] [--fresh]
 └──────────────────────────────────────────────────────────────┘
 ```
 
+When `--mode <preset>` is passed, `lifecycle.BuildAgentCmd` (`internal/lifecycle/agentcmd.go`)
+rewrites the agent command before the layout is rendered: `agent.cmd[0]` becomes `claude-mode`
+and `<preset>` is inserted as the first arg, so the pane actually runs
+`claude-mode <preset> --dangerously-skip-permissions`. This rewrite is claude-only; any other
+agent exits 2. See [docs/features/claude-mode.md](../features/claude-mode.md).
+
 Detach via zellij's binding. The container keeps running. The CLI process exits cleanly.
 
 ## Kit build pipeline

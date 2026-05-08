@@ -204,6 +204,7 @@ agentbox run --fresh             # nuke the existing box and recreate
 agentbox run --kits node,claude  # one-off kit override (ignores default_kits)
 agentbox run --network open      # one-off network override
 agentbox run --no-attach         # create/start, don't drop into zellij
+agentbox run --mode safe         # claude-mode preset (claude agent only)
 agentbox shell                   # bare shell, no agent
 agentbox attach .                # reattach to current project's box
 agentbox exec . pwd              # one-off command inside the box
