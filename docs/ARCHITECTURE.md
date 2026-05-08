@@ -43,7 +43,7 @@ How the pieces fit. Read SPEC.md first for the *what*; this doc is the *how*.
 │   │  │  $PWD (project)        same path inside        │             │      │
 │   │  │  ~/.gitconfig          rw                      │             │      │
 │   │  │  ~/.ssh                ro                      │             │      │
-│   │  │  ~/.claude (etc.)      rw                      │             │      │
+│   │  │  ~/.claude (etc.)      rw  + symlink targets   │             │      │
 │   │  │  STATE_DIR/history     rw (persistent)         │             │      │
 │   │  │  STATE_DIR/layout.kdl  ro                      │             │      │
 │   │  └────────────────────────────────────────────────┘             │      │

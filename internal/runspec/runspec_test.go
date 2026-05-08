@@ -821,6 +821,77 @@ func TestBuildPodmanCreateArgs_ClaudeSettingsMount_AbsentWhenNoPath(t *testing.T
 	}
 }
 
+// External symlink targets from ~/.claude (e.g. global skills) are emitted
+// as same-path bind-mounts so the preserved symlinks resolve inside the box.
+func TestBuildPodmanCreateArgs_ExtraSamePathMounts_Emitted(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.ExtraSamePathMounts = []string{
+		"/Users/foo/.agents/skills/skilltap",
+		"/Users/foo/.agents/skills/research",
+	}
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+
+	for _, want := range in.ExtraSamePathMounts {
+		var found bool
+		for _, m := range args.Mounts {
+			if m.Source == want && m.Target == want && m.Mode == "rw" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected same-path rw mount for %q, mounts: %+v", want, args.Mounts)
+		}
+	}
+}
+
+// Duplicate entries in ExtraSamePathMounts emit only one mount.
+func TestBuildPodmanCreateArgs_ExtraSamePathMounts_Deduped(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.ExtraSamePathMounts = []string{
+		"/Users/foo/.agents/skills/skilltap",
+		"/Users/foo/.agents/skills/skilltap", // duplicate
+		"",                                   // ignored
+	}
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	count := 0
+	for _, m := range args.Mounts {
+		if m.Source == "/Users/foo/.agents/skills/skilltap" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected 1 mount for the deduped path, got %d", count)
+	}
+}
+
+// Empty ExtraSamePathMounts adds no extra mounts.
+func TestBuildPodmanCreateArgs_ExtraSamePathMounts_EmptyIsNoOp(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.ExtraSamePathMounts = nil
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	for _, m := range args.Mounts {
+		if strings.Contains(m.Source, "/.agents/") {
+			t.Errorf("unexpected agents mount with empty ExtraSamePathMounts: %+v", m)
+		}
+	}
+}
+
 func TestBuildPodmanCreateArgs_SettingsShadow_AfterClaudeDir(t *testing.T) {
 	// Mount order: the shadow settings file MUST come after the ~/.claude directory
 	// mount so podman layers the file on top of the directory bind correctly.

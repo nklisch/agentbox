@@ -136,7 +136,7 @@ absolute paths in tooling output all match the host.
 | Project                   | rw   | `$PWD`                        | `$PWD`                       | Always. Same path inside and out.    |
 | `~/.gitconfig`            | rw   | `~/.gitconfig`                | `/root/.gitconfig`           | If `mounts.gitconfig = true`.        |
 | `~/.ssh`                  | ro   | `~/.ssh`                      | `/root/.ssh`                 | RO only. Writable is rejected.       |
-| Agent config              | rw   | e.g. `~/.claude`              | e.g. `/root/.claude`         | Per `[mounts.agent_configs]`.        |
+| Agent config              | rw   | e.g. `~/.claude`              | e.g. `/root/.claude`         | Per `[mounts.agent_configs]`. For `claude`, lifecycle additionally scans `~/.claude` for symlinks pointing outside the directory (e.g. `~/.claude/skills/<name>` → `~/.agents/skills/<name>`) and bind-mounts each resolved target at its same host path inside the box, so the symlinks resolve. Live host↔box sync is preserved (it's still a bind-mount, not a copy). |
 | Claude sibling JSON       | rw   | `~/.claude.json`              | `/root/.claude.json`         | Auto-mounted only when `agent = claude`. Lifecycle touches the source file empty if missing so podman doesn't bind-mount a directory. |
 | Shell history             | rw   | session state `history` file  | `/root/.local/share/agentbox-history` | Persists across box recreation. |
 | Layout                    | ro   | session state `layout.kdl`    | `/etc/agentbox/layout.kdl`   | Generated per session.               |
@@ -300,6 +300,16 @@ When `agent = claude`, the CLI also appends:
 [anthropics/claude-code#9184](https://github.com/anthropics/claude-code/issues/9184).
 Verified against `@anthropic-ai/claude-code@2.x` as of 2026-05-05.
 
+Users routinely symlink global skills and plugin caches into `~/.claude` from outside
+(e.g. `~/.claude/skills/<name> → ~/.agents/skills/<name>`). A raw bind-mount of `~/.claude`
+preserves the symlink, but its target path isn't reachable from inside the container, so
+the skill or plugin silently dangles. To fix this without losing live host↔box sync,
+lifecycle scans `~/.claude` for symlinks pointing outside the directory and emits an
+additional same-path bind-mount for each resolved target. Inside the box, the preserved
+symlink resolves to a real path that contains the same content the host sees, in real
+time. New skills installed on the host show up on the next `agentbox run`; live edits
+inside an existing box are unaffected (the existing target mount is already there).
+
 ### Conditional flags (nested containers)
 
 When `containers.enable = true`, the CLI appends the following to `podman create`:
@@ -336,8 +346,8 @@ When `layout = auditor` and `agent = claude`, the CLI also appends:
 -e BOX_TRAIL_FILE=/etc/agentbox/trail.jsonl                          # tells box-trail where to tail
 ```
 
-The shadow settings mount comes **after** the `~/.claude:/root/.claude:rw` directory mount so
-the file-level bind layers on top of the directory mount correctly — the host's
+The shadow settings mount comes **after** the `~/.claude:/root/.claude:rw` directory mount
+so the file-level bind layers on top of the directory mount correctly — the host's
 `~/.claude/settings.json` is never written.
 
 See docs/TRAIL.md for the full hook wiring, JSONL event schema, and shadow settings merge
