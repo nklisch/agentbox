@@ -23,9 +23,15 @@ echo "claude kit install complete"
 # verifies SHA-256 against the release's checksums.txt, and exits non-zero on
 # any failure. Upstream does not yet honor a version env var; we read
 # CLAUDE_MODE_VERSION for forward-compat and log it for traceability.
+#
+# CLAUDE_MODE_INSTALL must be set on the RIGHT side of the pipe — env vars
+# placed before a piped command apply only to the left process (curl), not to
+# the consumer (sh). Without this, the upstream installer falls back to
+# $HOME/.local/bin (= /root/.local/bin in the build container), which is not
+# on PATH, and the binary check below fails.
 echo "Installing claude-mode (CLAUDE_MODE_VERSION=${CLAUDE_MODE_VERSION})..."
-CLAUDE_MODE_INSTALL=/usr/local/bin \
-  curl -fsSL https://raw.githubusercontent.com/nklisch/claude-code-modes/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/nklisch/claude-code-modes/main/install.sh \
+  | CLAUDE_MODE_INSTALL=/usr/local/bin sh
 
 command -v claude-mode >/dev/null || { echo "claude-mode binary not on PATH after install" >&2; exit 1; }
 
