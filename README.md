@@ -216,6 +216,7 @@ agentbox build polyglot,claude   # build/rebuild a kit image
 agentbox build --print base      # print the generated Dockerfile
 agentbox doctor                  # verify everything's wired up
 agentbox config show --json      # dump the merged config
+agentbox config set registry.refresh off   # pin kit images to your installed version
 ```
 
 Identifier resolution: most commands accept `.` (current `$PWD`'s
@@ -288,12 +289,55 @@ mode = "safe"                                        # off | safe | allowlist | 
 [containers]
 enable = false                                       # set true for nested docker/compose
 
+[registry]
+enabled = true                                       # pull pre-built kit images from GHCR
+refresh = "24h"                                      # off | always | Go duration (see "Staying current")
+
 [agents.claude]
 kits = ["polyglot", "claude"]
 cmd  = ["claude", "--dangerously-skip-permissions"]
 ```
 
 Full schema with defaults: [docs/SPEC.md § Configuration](docs/SPEC.md#configuration).
+
+---
+
+## Staying current
+
+claude-code and claude-mode ship multiple times a day. agentbox tracks both
+without forcing you to upgrade agentbox itself.
+
+**Kit images.** A daily GitHub Actions cron rebuilds every kit image
+(`polyglot-claude`, `polyglot-containers-claude`, `node-claude`,
+`polyglot-containers-codex`) at 03:00 UTC against the latest released
+agentbox version, with no Docker layer cache so `npm install -g
+@anthropic-ai/claude-code@latest` actually re-resolves. The fresh build
+is published as `ghcr.io/nklisch/agentbox-kits:latest-<nickname>`.
+Version-pinned tags (`<version>-<sha12>`, `<version>-<nickname>`) stay
+immutable, so pinning to a specific agentbox release still gets you
+deterministic kit content.
+
+**Client-side.** `[registry] refresh` controls how aggressively your
+local CLI follows the rolling tag:
+
+| Value | Behavior |
+| ----- | -------- |
+| `"off"` | Never use the rolling tag. Pin to whatever shipped with your installed agentbox version. |
+| `"24h"` (default) | Use the rolling tag; re-pull when the local cache entry is older than 24h. |
+| `"168h"` | Same, weekly. |
+| `"always"` | Use the rolling tag and re-pull on every cache hit. |
+
+So out of the box, every project's box picks up new claude-code within
+~24h of upstream release. CI / locked environments / reproducibility-
+sensitive work should set `agentbox config set registry.refresh off`.
+
+**Host config.** `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, and
+`~/.ssh` are bind-mounted same-path inside the box (matching the host's
+`HOME` path), so installed Claude Code plugins, skills, slash commands,
+and MCP servers are visible inside the box exactly as they are on the
+host. Symlinked global skill repos (e.g. `~/.claude/skills/foo →
+~/.agents/skills/foo`) are auto-discovered and bind-mounted at their
+resolved paths.
 
 ---
 
@@ -414,11 +458,24 @@ Read in this order:
 
 ## Status
 
-**v0.3.0** (2026-05-05) — named layout system + agent-activity trail. Three built-in
-layouts (`focus`, `reviewer`, `auditor`), custom KDL layout support, and a real-time
-Claude Code tool-call trail for the `auditor` layout. Linux is the primary platform;
-macOS via `podman machine` is supported. Docker works as a fallback runtime via
-`--runtime docker`.
+**v0.4.6** (2026-05-08) — same-path home mounts + IPv6-disabled-in-box +
+expanded default allowlist. Claude Code plugins (skills, slash commands,
+agents) now load correctly inside the box because `~/.claude/` is bind-mounted
+at the host's `HOME` path; previously the absolute paths embedded in
+`installed_plugins.json` pointed at nothing inside the container.
+
+**v0.4.x line.** [`claude-mode`](https://github.com/nklisch/claude-code-modes)
+preinstalled in the claude kit (v0.4.4) and exposed via `agentbox run --mode
+<preset>` (v0.4.5). External symlinks under `~/.claude` are now resolved and
+same-path bind-mounted (v0.4.3) so global skill/plugin repos work inside the
+box. Daily kit-image cron + opt-in rolling-tag refresh (this release) so
+upstream agent updates land within 24h without an agentbox release.
+
+**v0.3.0.** Named layout system (`focus` / `reviewer` / `auditor`), custom KDL
+layouts, and a real-time Claude Code tool-call trail for the `auditor` layout.
+
+Linux is the primary platform; macOS via `podman machine` is supported.
+Docker works as a fallback runtime via `--runtime docker`.
 
 Known gaps are tracked in [docs/PROGRESS.md](docs/PROGRESS.md). Notable open items:
 
@@ -426,8 +483,9 @@ Known gaps are tracked in [docs/PROGRESS.md](docs/PROGRESS.md). Notable open ite
   `agentbox exec . curl localhost:8080` from the host.
 - Each box's `containers` kit has its own podman image cache. No shared
   registry yet.
-- Kit images are built locally on first run, not pulled.
 - Trail support is Claude-only in v1. Codex and opencode adapters are deferred.
+- Shell history is mounted but no kit currently wires `HISTFILE` to use it
+  (latent — pre-existing).
 
 ---
 
