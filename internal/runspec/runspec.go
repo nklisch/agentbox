@@ -107,6 +107,26 @@ func RemoteAliasRef(host, version string, kits []string) string {
 	if host == "" || version == "" {
 		return ""
 	}
+	v := strings.TrimPrefix(version, "v")
+	return fmt.Sprintf("%s:%s-%s", host, v, kitNickname(kits))
+}
+
+// RemoteRollingRef returns the rolling alias variant `<host>:latest-<nickname>`.
+// This tag is reassigned by the daily kit-images cron and on every release,
+// so consumers who opt in via `registry.refresh` track upstream package
+// updates (claude-code, claude-mode, apt) without an agentbox release.
+// Returns "" if host is empty.
+func RemoteRollingRef(host string, kits []string) string {
+	if host == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:latest-%s", host, kitNickname(kits))
+}
+
+// kitNickname returns the human-readable kit nickname: the resolved list
+// minus "base", joined with "-". Falls back to "base" when the list is
+// just ["base"]. Used by RemoteAliasRef and RemoteRollingRef.
+func kitNickname(kits []string) string {
 	parts := make([]string, 0, len(kits))
 	for _, k := range kits {
 		if k == "base" {
@@ -117,8 +137,7 @@ func RemoteAliasRef(host, version string, kits []string) string {
 	if len(parts) == 0 {
 		parts = []string{"base"}
 	}
-	v := strings.TrimPrefix(version, "v")
-	return fmt.Sprintf("%s:%s-%s", host, v, strings.Join(parts, "-"))
+	return strings.Join(parts, "-")
 }
 
 // KitImageTag returns the canonical image tag for a kit list.

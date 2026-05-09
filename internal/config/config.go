@@ -31,6 +31,26 @@ type Registry struct {
 	Host        string `toml:"host" json:"host"`                 // e.g. "ghcr.io/nklisch/agentbox-kits"
 	Verify      string `toml:"verify" json:"verify"`             // "none" (v0.3+) | "cosign" (deferred)
 	PullTimeout string `toml:"pull_timeout" json:"pull_timeout"` // Go duration string, e.g. "5m"
+
+	// Refresh controls whether agentbox tracks the rolling `latest-<nickname>`
+	// kit-image tag instead of the immutable `<version>-<sha12>` tag, and how
+	// often it re-pulls. Accepted values:
+	//   ""       — same as "off"
+	//   "off"    — never use the rolling tag; always pull the version-pinned
+	//              ref (default; preserves reproducibility)
+	//   "always" — use the rolling tag and bypass the cache age check; pull
+	//              whenever a build would otherwise hit the local cache
+	//   "<dur>"  — Go duration (e.g. "24h", "168h"); use the rolling tag and
+	//              re-pull when the local cache entry is older than <dur>
+	//
+	// Pairs with the daily kit-images cron (.github/workflows/kit-images.yml):
+	// the cron republishes `latest-<nickname>` against the latest released
+	// agentbox version each night, picking up new claude-code / claude-mode
+	// upstream releases. Without this knob, users on a stable agentbox
+	// version stay pinned to whatever upstream packages shipped with that
+	// release — fine for reproducibility, painful when claude-code releases
+	// daily.
+	Refresh string `toml:"refresh" json:"refresh"`
 }
 
 type Network struct {
@@ -219,10 +239,52 @@ func (c Config) Validate() error {
 	if c.Registry.Enabled && c.Registry.Host == "" {
 		return fmt.Errorf("registry.enabled=true requires registry.host to be set")
 	}
+	if _, err := ParseRefresh(c.Registry.Refresh); err != nil {
+		return fmt.Errorf("registry.refresh: %w", err)
+	}
 	if c.Registry.PullTimeout != "" {
 		if _, err := time.ParseDuration(c.Registry.PullTimeout); err != nil {
 			return fmt.Errorf("registry.pull_timeout: %w", err)
 		}
 	}
 	return nil
+}
+
+// RefreshPolicy describes the desired registry-refresh behavior parsed from
+// `registry.refresh`. It's a value type so callers can branch on it without
+// re-parsing strings. Use ParseRefresh to construct one.
+type RefreshPolicy struct {
+	// Enabled is true when the policy is anything other than "off". When
+	// false, agentbox uses the immutable `<version>-<sha12>` ref and the
+	// cache short-circuit always wins.
+	Enabled bool
+	// Always is true when the policy is "always": skip the cache age check
+	// and pull the rolling tag whenever a build would otherwise hit the
+	// local cache.
+	Always bool
+	// MaxAge is the duration threshold for a duration-based policy. When
+	// the local cache entry is older than MaxAge, agentbox bypasses the
+	// cache short-circuit and re-pulls. Ignored when Always is true.
+	MaxAge time.Duration
+}
+
+// ParseRefresh parses a registry.refresh value into a RefreshPolicy.
+// Accepts: "" or "off" → disabled; "always" → enabled+Always; otherwise
+// a Go duration string (e.g. "24h", "168h"). Returns an error for any
+// other value so users see a clear validation message at config-load time.
+func ParseRefresh(s string) (RefreshPolicy, error) {
+	switch s {
+	case "", "off":
+		return RefreshPolicy{}, nil
+	case "always":
+		return RefreshPolicy{Enabled: true, Always: true}, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return RefreshPolicy{}, fmt.Errorf("must be 'off', 'always', or a Go duration like '24h'; got %q", s)
+	}
+	if d < 0 {
+		return RefreshPolicy{}, fmt.Errorf("must be non-negative, got %q", s)
+	}
+	return RefreshPolicy{Enabled: true, MaxAge: d}, nil
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nklisch/agentbox/internal/config"
 	"github.com/nklisch/agentbox/internal/runspec"
 )
 
@@ -113,10 +114,12 @@ type Builder struct {
 
 	// Registry-pull plumbing. When RegistryHost is empty, the pull path is
 	// skipped (preserving pre-registry behavior for tests/legacy callers).
-	RegistryHost    string        // e.g. "ghcr.io/nklisch/agentbox-kits"; "" disables pull
-	RegistryEnabled bool          // mirrors cfg.Registry.Enabled
-	RegistryVerify  string        // "none" today
-	PullTimeout     time.Duration // 0 = no timeout
+	RegistryHost    string                // e.g. "ghcr.io/nklisch/agentbox-kits"; "" disables pull
+	RegistryEnabled bool                  // mirrors cfg.Registry.Enabled
+	RegistryVerify  string                // "none" today
+	PullTimeout     time.Duration         // 0 = no timeout
+	RegistryRefresh config.RefreshPolicy  // pre-parsed cfg.Registry.Refresh; zero value = off
+	Now             func() time.Time      // time source for refresh age check; nil → time.Now
 }
 
 // Resolve resolves the requested kit list using the builder's registry and
@@ -175,17 +178,22 @@ func (b *Builder) Build(requested []string, opts BuildOpts) (BuildResult, error)
 			return result, fmt.Errorf("check cache: %w", err)
 		}
 		if match {
-			// Cache says we built this exact kit set. But the image might have
-			// been pruned externally (e.g., `podman rmi`) — verify it still exists.
+			// Cache says we built this exact kit set. But two things can
+			// invalidate that:
+			//   1. The image got pruned externally (e.g. `podman rmi`).
+			//   2. registry.refresh is enabled and the cache entry is older
+			//      than the configured threshold — the user wants the
+			//      rolling tag re-pulled.
 			has, err := b.Runner.HasImage(res.Tag)
 			if err != nil {
 				return result, fmt.Errorf("check image: %w", err)
 			}
-			if has {
+			if has && !b.cacheStaleByRefresh(res) {
 				result.CacheHit = true
 				return result, nil
 			}
-			// Cache is stale (image gone); fall through to rebuild.
+			// Cache is stale (image gone, or refresh threshold elapsed);
+			// fall through to the pull/build path.
 		}
 	}
 
@@ -208,7 +216,7 @@ func (b *Builder) Build(requested []string, opts BuildOpts) (BuildResult, error)
 				Tag:             res.Tag,
 				Kits:            res.Names(),
 				KitHashes:       hashes,
-				BuiltAt:         time.Now().UTC(),
+				BuiltAt:         b.now().UTC(),
 				AgentboxVersion: b.Version,
 				Source:          "registry",
 			}
@@ -251,7 +259,7 @@ func (b *Builder) Build(requested []string, opts BuildOpts) (BuildResult, error)
 		Tag:             res.Tag,
 		Kits:            res.Names(),
 		KitHashes:       hashes,
-		BuiltAt:         time.Now().UTC(),
+		BuiltAt:         b.now().UTC(),
 		AgentboxVersion: b.Version,
 		Source:          "local",
 	}
@@ -261,14 +269,64 @@ func (b *Builder) Build(requested []string, opts BuildOpts) (BuildResult, error)
 	return result, nil
 }
 
+// cacheStaleByRefresh reports whether registry.refresh policy says we should
+// bypass an otherwise-valid cache entry to re-pull the rolling tag. Returns
+// false when refresh is disabled, when no cache entry exists, when the
+// entry's BuiltAt is missing or in the future (clock skew), or when the
+// entry is younger than the configured MaxAge. Returns true when the policy
+// is "always" or when the entry is older than MaxAge.
+func (b *Builder) cacheStaleByRefresh(res Resolved) bool {
+	if !b.RegistryRefresh.Enabled {
+		return false
+	}
+	if b.RegistryRefresh.Always {
+		return true
+	}
+	entry, err := b.Cache.Lookup(res.Tag)
+	if err != nil {
+		// No entry → caller will treat the cache as a miss anyway. Returning
+		// false here keeps the existing fallthrough semantics intact.
+		return false
+	}
+	if entry.BuiltAt.IsZero() {
+		return false
+	}
+	age := b.now().Sub(entry.BuiltAt)
+	if age < 0 {
+		// Clock went backwards (or BuiltAt is in the future). Don't force a
+		// rebuild on the user — they didn't ask for arbitrary churn.
+		return false
+	}
+	return age > b.RegistryRefresh.MaxAge
+}
+
+// now returns the configured time source or time.Now. Tests inject a fake
+// clock via Builder.Now to exercise age-based refresh logic deterministically.
+func (b *Builder) now() time.Time {
+	if b.Now != nil {
+		return b.Now()
+	}
+	return time.Now()
+}
+
 // tryPullAndTag attempts to pull the remote image and retag it with the
 // canonical local tag. Returns (true, nil) on success. Returns (false, nil)
 // when the pull failed in a way the consumer should silently fall back from
 // (NotFound). Returns (false, err) on classified failures the user should
 // see (Auth, Network) — the caller still falls back to local build, but
 // surfaces the wrapped error.
+//
+// Ref selection: when RegistryRefresh is enabled, the rolling
+// `latest-<nickname>` tag is used so the user picks up upstream package
+// updates from the daily cron rebuild. Otherwise the immutable
+// `<version>-<sha12>` tag is used (default; preserves reproducibility).
 func (b *Builder) tryPullAndTag(res Resolved, opts BuildOpts) (bool, error) {
-	ref := runspec.RemoteImageRef(b.RegistryHost, b.Version, res.Names())
+	var ref string
+	if b.RegistryRefresh.Enabled {
+		ref = runspec.RemoteRollingRef(b.RegistryHost, res.Names())
+	} else {
+		ref = runspec.RemoteImageRef(b.RegistryHost, b.Version, res.Names())
+	}
 	if ref == "" {
 		return false, nil
 	}

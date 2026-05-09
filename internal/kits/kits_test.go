@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
+	"github.com/nklisch/agentbox/internal/config"
 	"github.com/nklisch/agentbox/internal/kits"
 	"github.com/nklisch/agentbox/internal/runspec"
 )
@@ -1011,6 +1013,131 @@ func TestBuilder_NoCache_AlwaysBuilds(t *testing.T) {
 	}
 	if len(runner.builds) != 2 {
 		t.Errorf("NoCache should call Runner.Build every time; calls: %d", len(runner.builds))
+	}
+}
+
+// --- registry.refresh: rolling-tag pull + cache age gate ---
+
+// When refresh is "always", a normally-valid cache hit is bypassed and the
+// builder pulls the rolling `latest-<nickname>` tag instead.
+func TestBuilder_RefreshAlways_BypassesCacheAndUsesRollingRef(t *testing.T) {
+	res := resolveBase(t)
+	runner := &fakeRunner{hasImage: map[string]bool{res.Tag: true}}
+	b := newBuilder(t, runner)
+	b.RegistryEnabled = true
+	b.RegistryHost = "ghcr.io/example/agentbox-kits"
+	b.RegistryRefresh = config.RefreshPolicy{Enabled: true, Always: true}
+
+	// First build: populates cache (no pull config to verify yet — tryPull is
+	// gated on RegistryEnabled which we just turned on, but with Always set
+	// the cache short-circuit is skipped and Pull WILL be called).
+	if _, err := b.Build([]string{"base"}, kits.BuildOpts{}); err != nil {
+		t.Fatalf("first Build: %v", err)
+	}
+
+	// Second build: cache hit + image present, but Always=true → re-pull.
+	if _, err := b.Build([]string{"base"}, kits.BuildOpts{}); err != nil {
+		t.Fatalf("second Build: %v", err)
+	}
+	if len(runner.pullCalls) < 1 {
+		t.Fatalf("expected at least 1 Pull call when refresh=always, got %d", len(runner.pullCalls))
+	}
+	wantRef := "ghcr.io/example/agentbox-kits:latest-base"
+	for _, pc := range runner.pullCalls {
+		if pc.Ref != wantRef {
+			t.Errorf("Pull ref = %q, want rolling tag %q (refresh enabled should not use version-pinned ref)", pc.Ref, wantRef)
+		}
+	}
+}
+
+// When refresh is a duration and the cache entry is younger than the
+// threshold, the cache short-circuit still wins and no pull happens.
+func TestBuilder_RefreshDuration_FreshCacheStillHits(t *testing.T) {
+	res := resolveBase(t)
+	runner := &fakeRunner{hasImage: map[string]bool{res.Tag: true}}
+	b := newBuilder(t, runner)
+	b.RegistryEnabled = true
+	b.RegistryHost = "ghcr.io/example/agentbox-kits"
+	b.RegistryRefresh = config.RefreshPolicy{Enabled: true, MaxAge: 24 * time.Hour}
+
+	// Inject a clock so the first build's BuiltAt is "now" and the second
+	// build's now is only 1h later — well under the 24h threshold.
+	t0 := time.Date(2026, 5, 9, 0, 0, 0, 0, time.UTC)
+	clock := t0
+	b.Now = func() time.Time { return clock }
+
+	if _, err := b.Build([]string{"base"}, kits.BuildOpts{}); err != nil {
+		t.Fatalf("first Build: %v", err)
+	}
+	pullsBefore := len(runner.pullCalls)
+
+	clock = t0.Add(1 * time.Hour)
+	result, err := b.Build([]string{"base"}, kits.BuildOpts{})
+	if err != nil {
+		t.Fatalf("second Build: %v", err)
+	}
+	if !result.CacheHit {
+		t.Error("cache should hit when entry is younger than refresh threshold")
+	}
+	if len(runner.pullCalls) != pullsBefore {
+		t.Errorf("expected no new Pull calls, got %d → %d", pullsBefore, len(runner.pullCalls))
+	}
+}
+
+// When refresh is a duration and the cache entry is older than the threshold,
+// the cache short-circuit is bypassed and a pull is attempted with the
+// rolling tag.
+func TestBuilder_RefreshDuration_StaleCacheBypassed(t *testing.T) {
+	res := resolveBase(t)
+	runner := &fakeRunner{hasImage: map[string]bool{res.Tag: true}}
+	b := newBuilder(t, runner)
+	b.RegistryEnabled = true
+	b.RegistryHost = "ghcr.io/example/agentbox-kits"
+	b.RegistryRefresh = config.RefreshPolicy{Enabled: true, MaxAge: 24 * time.Hour}
+
+	t0 := time.Date(2026, 5, 9, 0, 0, 0, 0, time.UTC)
+	clock := t0
+	b.Now = func() time.Time { return clock }
+
+	if _, err := b.Build([]string{"base"}, kits.BuildOpts{}); err != nil {
+		t.Fatalf("first Build: %v", err)
+	}
+	pullsBefore := len(runner.pullCalls)
+
+	// Jump 25h forward — past the 24h refresh threshold.
+	clock = t0.Add(25 * time.Hour)
+	if _, err := b.Build([]string{"base"}, kits.BuildOpts{}); err != nil {
+		t.Fatalf("second Build: %v", err)
+	}
+	if len(runner.pullCalls) <= pullsBefore {
+		t.Errorf("expected a new Pull call after 25h, got %d → %d", pullsBefore, len(runner.pullCalls))
+	}
+}
+
+// Refresh disabled (default) preserves the legacy behavior: cache hits
+// skip the registry and the version-pinned ref is used when pulling.
+func TestBuilder_RefreshOff_UsesVersionPinnedRef(t *testing.T) {
+	res := resolveBase(t)
+	runner := &fakeRunner{hasImage: map[string]bool{res.Tag: false}}
+	b := newBuilder(t, runner)
+	b.RegistryEnabled = true
+	b.RegistryHost = "ghcr.io/example/agentbox-kits"
+	// RegistryRefresh left at zero value (disabled).
+
+	if _, err := b.Build([]string{"base"}, kits.BuildOpts{}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(runner.pullCalls) == 0 {
+		t.Fatal("expected a Pull call (registry enabled, no local image)")
+	}
+	for _, pc := range runner.pullCalls {
+		// RemoteImageRef strips the leading "v" from the version.
+		if !strings.Contains(pc.Ref, ":0.1-") {
+			t.Errorf("Pull ref = %q, want version-pinned (:0.1-...) when refresh disabled", pc.Ref)
+		}
+		if strings.Contains(pc.Ref, ":latest-") {
+			t.Errorf("Pull ref = %q, must NOT use rolling tag when refresh disabled", pc.Ref)
+		}
 	}
 }
 

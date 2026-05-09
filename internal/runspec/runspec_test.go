@@ -117,6 +117,32 @@ func TestRemoteAliasRef_OnlyBase(t *testing.T) {
 	}
 }
 
+// RemoteRollingRef returns the rolling `latest-<nickname>` tag used by
+// registry.refresh consumers. No version component — the tag is rewritten
+// daily by the kit-images cron against the latest released agentbox version.
+func TestRemoteRollingRef_Format(t *testing.T) {
+	kits := []string{"base", "polyglot", "claude"}
+	ref := runspec.RemoteRollingRef("ghcr.io/n/agentbox-kits", kits)
+	want := "ghcr.io/n/agentbox-kits:latest-polyglot-claude"
+	if ref != want {
+		t.Errorf("RemoteRollingRef() = %q, want %q", ref, want)
+	}
+}
+
+func TestRemoteRollingRef_EmptyHost(t *testing.T) {
+	if ref := runspec.RemoteRollingRef("", []string{"base", "claude"}); ref != "" {
+		t.Errorf("empty host should return empty, got %q", ref)
+	}
+}
+
+func TestRemoteRollingRef_OnlyBase(t *testing.T) {
+	ref := runspec.RemoteRollingRef("ghcr.io/n/agentbox-kits", []string{"base"})
+	want := "ghcr.io/n/agentbox-kits:latest-base"
+	if ref != want {
+		t.Errorf("RemoteRollingRef() = %q, want %q", ref, want)
+	}
+}
+
 func TestNetworkArg_Off(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Network.Mode = "off"

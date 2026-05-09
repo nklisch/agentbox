@@ -126,13 +126,23 @@ layout = "focus"   # focus | reviewer | auditor | <custom>
 
 [registry]
 # Kit-image registry pull. When enabled and every kit in the resolved list is a
-# built-in kit (no user shadowing), agentbox tries `podman pull <remote>` against
-# the version-pinned GHCR tag before falling back to a local build.
-# Pass --no-pull to skip the pull attempt unconditionally.
+# built-in kit (no user shadowing), agentbox tries `podman pull <remote>` before
+# falling back to a local build. Pass --no-pull to skip the pull attempt
+# unconditionally.
 enabled      = true                # set false to always build locally
 host         = "ghcr.io/nklisch/agentbox-kits"
 verify       = "none"              # "none" only; "cosign" is reserved, rejected at parse time
 pull_timeout = "5m"                # Go duration; 0 = no timeout
+# refresh controls whether agentbox tracks the rolling `latest-<nickname>` tag
+# (republished daily by the kit-images cron) instead of the immutable
+# `<version>-<sha12>` tag. Useful for picking up upstream agent releases
+# (claude-code ships multiple times a day) without an agentbox release.
+#   ""        → off (default; reproducible)
+#   "off"     → same as ""
+#   "always"  → use rolling tag and bypass the cache age check
+#   "<dur>"   → use rolling tag; re-pull when cache entry is older than <dur>
+#               (e.g. "24h", "168h" for weekly)
+refresh      = ""                  # off | always | Go duration
 
 [agents.claude]
 kits = ["polyglot", "claude"]

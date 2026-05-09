@@ -1,23 +1,36 @@
 name: kit-images
 
 # Builds multi-arch (linux/amd64 + linux/arm64) kit-list images and pushes
-# them to ghcr.io/nklisch/agentbox-kits. Triggered on every v* tag (in
-# lockstep with release.yml) and via workflow_dispatch for re-publishing
-# without a new tag.
+# them to ghcr.io/nklisch/agentbox-kits. Three trigger modes:
 #
-# Each published image carries three tags:
-#   <version>-<sha12>      — version-pinned, sha-pinned (CLI lookup target; immutable)
-#   <version>-<nickname>   — version-pinned, human-readable (immutable)
-#   latest-<nickname>      — rolling, reassigned on each release
+#   push (v* tag)        — release-time. Pushes all 3 tags:
+#                            <version>-<sha12>     (immutable)
+#                            <version>-<nickname>  (immutable)
+#                            latest-<nickname>     (rolling; reassigned)
+#   workflow_dispatch    — manual republish at a specified version. Same as push.
+#   schedule (daily)     — refresh upstream packages (claude-code, claude-mode,
+#                          apt updates, etc.) without an agentbox release.
+#                          Resolves version from the latest released v* tag and
+#                          pushes ONLY `latest-<nickname>`. Version-pinned tags
+#                          stay immutable so users opted into a specific
+#                          agentbox version see deterministic kit content.
+#
+# Cadence matters because @anthropic-ai/claude-code ships multiple times a day.
+# A user who installs agentbox on a Wednesday should get a kit image with the
+# Wednesday morning claude-code, not the one from the last release.
 
 on:
   push:
     tags: ['v*']
+  schedule:
+    # Daily at 03:00 UTC. Picks up the prior day's claude-code releases plus
+    # any apt-package security updates without churning during US/EU work hours.
+    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       version:
         description: 'Version tag to build under (e.g. v0.3.0). Required for manual runs.'
-        required: true
+        required: false
 
 # GITHUB_TOKEN needs packages:write to push to GHCR. contents:read for checkout.
 permissions:
@@ -57,11 +70,18 @@ jobs:
 
       # Resolve the version string once and expose it as a step output so all
       # subsequent steps reference a single source of truth.
+      #
+      # Also expose `rolling_only`: true on scheduled (cron) runs, false on
+      # tag-push or workflow_dispatch. The build-push step uses it to skip
+      # the immutable `<version>-<sha12>` and `<version>-<nickname>` tags,
+      # leaving them frozen as a record of "what shipped with this release."
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Take the raw input (workflow_dispatch) or git ref (push), then
+          # Take the version from the appropriate source per event type, then
           # strip BOTH the refs/tags/ prefix and the leading v so the published
           # tag is `0.4.0-<sha>`, not `v0.4.0-<sha>`. The CLI's RemoteImageRef
           # also strips the v before composing its lookup ref, so without this
@@ -69,12 +89,28 @@ jobs:
           # 404s, and consumers fall back to local build silently. This also
           # matches goreleaser's binary-tarball naming convention (e.g.
           # agentbox_0.4.0_linux_amd64.tar.gz, no v).
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            raw="${{ inputs.version }}"
-          else
-            raw="${GITHUB_REF#refs/tags/}"
-          fi
+          rolling_only=false
+          case "${{ github.event_name }}" in
+            workflow_dispatch)
+              raw="${{ inputs.version }}"
+              if [ -z "$raw" ]; then
+                # Default to the latest released tag when version input is omitted.
+                raw="$(gh release view --json tagName --jq .tagName)"
+              fi
+              ;;
+            schedule)
+              # Cron runs aren't tied to a tag; always rebuild against the most
+              # recent release so the agentbox binary embedded in CI matches
+              # what users actually install. Push only the rolling tag.
+              raw="$(gh release view --json tagName --jq .tagName)"
+              rolling_only=true
+              ;;
+            *)
+              raw="${GITHUB_REF#refs/tags/}"
+              ;;
+          esac
           echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
+          echo "rolling_only=${rolling_only}" >> "$GITHUB_OUTPUT"
 
       # Guard: fail loudly if .github/published-kits.yml and the matrix above
       # have drifted. yq is preinstalled on ubuntu-latest runners.
@@ -155,14 +191,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and push a multi-arch manifest. Three tags per image:
-      #   1. <version>-<sha12>       — deterministic, matches CLI's RemoteImageRef lookup
-      #   2. <version>-<nickname>    — human-readable for manual pulls
-      #   3. latest-<nickname>       — rolling alias for "give me the newest"
+      # Compose the tag list. Tag-push and workflow_dispatch publish all three
+      # tags (deterministic + human-readable + rolling). Scheduled runs publish
+      # ONLY the rolling tag — the version-pinned tags stay immutable so that
+      # `<version>-<sha12>` / `<version>-<nickname>` always reflect the kit
+      # content that shipped with that agentbox release.
+      - name: Compose image tags
+        id: tags
+        shell: bash
+        run: |
+          REPO="ghcr.io/${{ github.repository_owner }}/agentbox-kits"
+          ROLLING="${REPO}:latest-${{ matrix.nickname }}"
+          if [ "${{ steps.version.outputs.rolling_only }}" = "true" ]; then
+            tags="${ROLLING}"
+          else
+            tags="${REPO}:${{ steps.version.outputs.version }}-${{ steps.emit.outputs.sha12 }}
+          ${REPO}:${{ steps.version.outputs.version }}-${{ matrix.nickname }}
+          ${ROLLING}"
+          fi
+          {
+            echo 'list<<EOF'
+            echo "${tags}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # Build and push a multi-arch manifest. Tag set is computed above per
+      # event type.
       #
-      # cache-from/cache-to are scoped per nickname so the polyglot-claude
-      # cache doesn't pollute node-claude's layer cache (they share base layers
-      # but the GHA cache backend can't merge scopes cleanly).
+      # Cache strategy:
+      #   tag-push / dispatch — read+write the per-nickname GHA cache scope.
+      #   schedule (cron)     — write only. Skip cache-from so layers like
+      #                          `npm install -g @anthropic-ai/claude-code@latest`
+      #                          actually re-resolve from the npm registry.
+      #                          Without this, Docker treats the byte-identical
+      #                          RUN line as a cache hit and the rolling tag
+      #                          ships the same claude-code as yesterday — the
+      #                          whole point of the cron is defeated. Still
+      #                          writes to cache so the next release run hits
+      #                          a warm cache.
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v7
         with:
@@ -170,10 +236,9 @@ jobs:
           file: ./build-ctx/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/agentbox-kits:${{ steps.version.outputs.version }}-${{ steps.emit.outputs.sha12 }}
-            ghcr.io/${{ github.repository_owner }}/agentbox-kits:${{ steps.version.outputs.version }}-${{ matrix.nickname }}
-            ghcr.io/${{ github.repository_owner }}/agentbox-kits:latest-${{ matrix.nickname }}
+          tags: ${{ steps.tags.outputs.list }}
+          no-cache: ${{ github.event_name == 'schedule' }}
           # Per-nickname cache scope avoids cross-contamination between kit lists.
-          cache-from: type=gha,scope=${{ matrix.nickname }}
+          # cache-from suppressed on schedule so npm/curl re-resolve upstream.
+          cache-from: ${{ github.event_name == 'schedule' && '' || format('type=gha,scope={0}', matrix.nickname) }}
           cache-to:   type=gha,scope=${{ matrix.nickname }},mode=max

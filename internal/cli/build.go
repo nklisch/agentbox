@@ -88,6 +88,7 @@ func newBuilder(cfg config.Config) (*kits.Builder, error) {
 		return nil, exitcode.Wrap(exitcode.Generic, err)
 	}
 	timeout, _ := time.ParseDuration(cfg.Registry.PullTimeout) // Validate() already accepted it
+	refresh, _ := config.ParseRefresh(cfg.Registry.Refresh)    // Validate() already accepted it
 	return &kits.Builder{
 		Registry:        reg,
 		Cache:           cache,
@@ -97,6 +98,7 @@ func newBuilder(cfg config.Config) (*kits.Builder, error) {
 		RegistryHost:    cfg.Registry.Host,
 		RegistryVerify:  cfg.Registry.Verify,
 		PullTimeout:     timeout,
+		RegistryRefresh: refresh,
 	}, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nklisch/agentbox/internal/config"
 )
@@ -167,6 +168,73 @@ func TestValidate_AllValidNetworkModes(t *testing.T) {
 		cfg := config.Config{Runtime: "podman", Network: config.Network{Mode: mode}}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("Validate() with network.mode=%q: %v", mode, err)
+		}
+	}
+}
+
+// --- registry.refresh: ParseRefresh + Validate ---
+
+func TestParseRefresh_Off(t *testing.T) {
+	for _, s := range []string{"", "off"} {
+		got, err := config.ParseRefresh(s)
+		if err != nil {
+			t.Errorf("ParseRefresh(%q) unexpected err: %v", s, err)
+		}
+		if got.Enabled {
+			t.Errorf("ParseRefresh(%q): expected Enabled=false, got %+v", s, got)
+		}
+	}
+}
+
+func TestParseRefresh_Always(t *testing.T) {
+	got, err := config.ParseRefresh("always")
+	if err != nil {
+		t.Fatalf("ParseRefresh(always) err: %v", err)
+	}
+	if !got.Enabled || !got.Always {
+		t.Errorf("ParseRefresh(always): want Enabled+Always, got %+v", got)
+	}
+}
+
+func TestParseRefresh_Duration(t *testing.T) {
+	got, err := config.ParseRefresh("24h")
+	if err != nil {
+		t.Fatalf("ParseRefresh(24h) err: %v", err)
+	}
+	if !got.Enabled || got.Always || got.MaxAge != 24*time.Hour {
+		t.Errorf("ParseRefresh(24h): want Enabled+24h, got %+v", got)
+	}
+}
+
+func TestParseRefresh_Invalid(t *testing.T) {
+	for _, s := range []string{"banana", "1xyz", "24"} { // "24" alone fails ParseDuration too
+		if _, err := config.ParseRefresh(s); err == nil {
+			t.Errorf("ParseRefresh(%q): expected error, got nil", s)
+		}
+	}
+}
+
+func TestParseRefresh_NegativeRejected(t *testing.T) {
+	if _, err := config.ParseRefresh("-1h"); err == nil {
+		t.Errorf("ParseRefresh(-1h): expected error, got nil")
+	}
+}
+
+func TestValidate_RegistryRefresh(t *testing.T) {
+	good := []string{"", "off", "always", "1h", "24h", "168h"}
+	for _, s := range good {
+		cfg := config.DefaultConfig()
+		cfg.Registry.Refresh = s
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() with registry.refresh=%q: %v", s, err)
+		}
+	}
+	bad := []string{"banana", "-1h"}
+	for _, s := range bad {
+		cfg := config.DefaultConfig()
+		cfg.Registry.Refresh = s
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate() with registry.refresh=%q: expected error, got nil", s)
 		}
 	}
 }
