@@ -40,6 +40,7 @@ type PodmanCreateArgs struct {
 	Network  string
 	IP       string   // --ip <addr>; used by the CoreDNS sidecar for stable addressing
 	DNS      []string // --dns <ip> entries; Phase 6 sets to [coredns-sidecar-ip] for safe/allowlist
+	Sysctls  []KV     // --sysctl key=value
 	Image    string
 	Argv     []string // typically [sleep, infinity]
 }
@@ -68,7 +69,7 @@ type BuildInput struct {
 	// by lifecycle when trailEnabled(layoutName, agent) is true; both are empty
 	// otherwise. Lifecycle is responsible for the gate decision.
 	TrailHostPath          string // <state>/trail.jsonl; bound rw to /etc/agentbox/trail.jsonl
-	ClaudeSettingsHostPath string // <state>/claude-settings.json; shadow-mounted ro over /root/.claude/settings.json
+	ClaudeSettingsHostPath string // <state>/claude-settings.json; shadow-mounted ro over $HOME/.claude/settings.json
 
 	// ExtraSamePathMounts is a list of host paths to bind-mount at the SAME
 	// path inside the container (the project's same-path-mount philosophy).
@@ -161,6 +162,18 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		DNS:     in.SidecarDNS,
 		Image:   KitImageTag(in.Kits),
 		Argv:    []string{"sleep", "infinity"},
+		// Disable IPv6 inside the box. agentbox-managed Podman networks are
+		// created v4-only (ipv6_enabled=false) and the safe/allowlist iptables
+		// + ipset plumbing has no v6 equivalent. Without this, AAAA lookups
+		// resolve via CoreDNS but TCP connect to the resulting v6 address
+		// hangs (no v6 route), producing mysterious plugin/MCP failures.
+		// `none` mode is unaffected (no v6 interface to disable);
+		// `open` mode defaults to Podman's bridge which is also v4-only
+		// in typical rootless setups, so this is the right default there too.
+		Sysctls: []KV{
+			{Key: "net.ipv6.conf.all.disable_ipv6", Value: "1"},
+			{Key: "net.ipv6.conf.default.disable_ipv6", Value: "1"},
+		},
 	}
 
 	args.Labels = []KV{
@@ -175,6 +188,16 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		{"agentbox.created", in.Created.UTC().Format(time.RFC3339)},
 	}
 
+	// boxHome is the in-container HOME path. We mirror the host's home dir
+	// path (same-path principle) so that absolute host paths embedded in
+	// config files (claude plugin JSON's installPath, gitconfig includeIf,
+	// etc.) resolve inside the box. Falls back to "/root" when HomeDir is
+	// empty (test paths and defensive default — production always sets it).
+	boxHome := in.HomeDir
+	if boxHome == "" {
+		boxHome = "/root"
+	}
+
 	args.EnvVars = []KV{
 		{Key: "AGENTBOX_PROJECT_ID", Value: in.ProjectID},
 		{Key: "AGENTBOX_PROJECT", Value: in.ProjectName},
@@ -183,9 +206,12 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 		{Key: "AGENTBOX_KIT_IMAGE", Value: args.Image},
 		{Key: "AGENTBOX_NETWORK", Value: cfg.Network.Mode},
 		{Key: "AGENTBOX_CREATED", Value: in.Created.UTC().Format(time.RFC3339)},
+		// HOME inside the box mirrors the host's home dir path (same-path).
+		// Container still runs as uid 0; HOME is just an env var, not a uid.
+		{Key: "HOME", Value: boxHome},
 		// In-container path; bind-mounts to <state-dir>/saved on the host.
 		// Must match the saved/ Mount Target below.
-		{Key: "AGENTBOX_SAVED_DIR", Value: "/root/.local/share/agentbox-saved"},
+		{Key: "AGENTBOX_SAVED_DIR", Value: boxHome + "/.local/share/agentbox-saved"},
 	}
 	// Claude Code refuses --dangerously-skip-permissions when whoami==root
 	// (anthropics/claude-code#9184). agentbox boxes run as root by design
@@ -204,23 +230,29 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 	if cfg.Mounts.Gitconfig && in.HomeDir != "" {
 		args.Mounts = append(args.Mounts, Mount{
 			Source: in.HomeDir + "/.gitconfig",
-			Target: "/root/.gitconfig",
+			Target: boxHome + "/.gitconfig",
 			Mode:   "rw",
 		})
 	}
 	if cfg.Mounts.SSHReadonly && in.HomeDir != "" {
 		args.Mounts = append(args.Mounts, Mount{
 			Source: in.HomeDir + "/.ssh",
-			Target: "/root/.ssh",
+			Target: boxHome + "/.ssh",
 			Mode:   "ro",
 		})
 	}
-	// Agent config dir for the resolved agent only.
+	// Agent config dir for the resolved agent only. Same-path mount: the
+	// expanded host path is also the in-container target. This is critical
+	// for claude — installed_plugins.json and known_marketplaces.json embed
+	// absolute host paths (installPath, installLocation) that claude opens
+	// verbatim. Without same-path mounting they'd point at nothing inside
+	// the box and plugins would silently fail to load. Same-path is harmless
+	// for codex/opencode (their config dirs don't embed absolute paths).
 	if src, ok := cfg.Mounts.AgentConfigs[in.Agent]; ok && src != "" {
 		expanded := paths.ExpandHome(src, in.HomeDir)
 		args.Mounts = append(args.Mounts, Mount{
 			Source: expanded,
-			Target: "/root/." + in.Agent,
+			Target: expanded,
 			Mode:   "rw",
 		})
 	}
@@ -252,7 +284,7 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 	if in.Agent == "claude" && in.HomeDir != "" {
 		args.Mounts = append(args.Mounts, Mount{
 			Source: in.HomeDir + "/.claude.json",
-			Target: "/root/.claude.json",
+			Target: in.HomeDir + "/.claude.json",
 			Mode:   "rw",
 		})
 	}
@@ -274,15 +306,15 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 	// Settings shadow mount (auditor + claude only). Lifecycle has merged
 	// agentbox's trail hooks into the user's settings.json and written the
 	// result to in.ClaudeSettingsHostPath. We bind-mount it read-only on top
-	// of the existing ~/.claude directory mount so /root/.claude/settings.json
+	// of the existing ~/.claude directory mount so $HOME/.claude/settings.json
 	// inside the box is the agentbox-managed copy. Mount ORDER matters: this
-	// MUST come after the ~/.claude:/root/.claude directory mount above so
-	// podman layers the file on top of the directory mount correctly.
+	// MUST come after the ~/.claude same-path directory mount above so podman
+	// layers the file on top of the directory mount correctly.
 	// The host's actual ~/.claude/settings.json is never touched by agentbox.
 	if in.ClaudeSettingsHostPath != "" {
 		args.Mounts = append(args.Mounts, Mount{
 			Source: in.ClaudeSettingsHostPath,
-			Target: "/root/.claude/settings.json",
+			Target: boxHome + "/.claude/settings.json",
 			Mode:   "ro",
 		})
 	}
@@ -290,10 +322,10 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 	// Session state dir mounts (shell history, layout, effective config, saved/).
 	if in.StateDir != "" {
 		args.Mounts = append(args.Mounts,
-			Mount{Source: state.HistoryPath(in.StateDir), Target: "/root/.local/share/agentbox-history", Mode: "rw"},
+			Mount{Source: state.HistoryPath(in.StateDir), Target: boxHome + "/.local/share/agentbox-history", Mode: "rw"},
 			Mount{Source: state.LayoutPath(in.StateDir), Target: "/etc/agentbox/layout.kdl", Mode: "ro"},
 			Mount{Source: state.EffectiveConfigPath(in.StateDir), Target: "/etc/agentbox/config.toml", Mode: "ro"},
-			Mount{Source: state.SavedDirPath(in.StateDir), Target: "/root/.local/share/agentbox-saved", Mode: "rw"},
+			Mount{Source: state.SavedDirPath(in.StateDir), Target: boxHome + "/.local/share/agentbox-saved", Mode: "rw"},
 		)
 	}
 	// Extra mounts ("<src>:<dst>:<mode>"). Validation deferred to a later phase.
@@ -377,6 +409,9 @@ func (p PodmanCreateArgs) ToShell(runtime string) string {
 	}
 	for _, d := range p.DNS {
 		fmt.Fprintf(&b, "  --dns %q \\\n", d)
+	}
+	for _, s := range p.Sysctls {
+		fmt.Fprintf(&b, "  --sysctl %q \\\n", s.Key+"="+s.Value)
 	}
 	for _, e := range p.EnvNames {
 		fmt.Fprintf(&b, "  -e %s \\\n", e)

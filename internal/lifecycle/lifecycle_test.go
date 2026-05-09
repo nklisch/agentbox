@@ -1253,7 +1253,7 @@ func TestRun_AuditorClaude_WiresTrailMount(t *testing.T) {
 	if !hasMount(mounts, "/etc/agentbox/trail.jsonl", "rw") {
 		t.Errorf("expected trail.jsonl rw mount for auditor+claude, mounts: %+v", mounts)
 	}
-	if !hasMount(mounts, "/root/.claude/settings.json", "ro") {
+	if !hasMount(mounts, filepath.Join(l.Home, ".claude", "settings.json"), "ro") {
 		t.Errorf("expected shadow settings ro mount for auditor+claude, mounts: %+v", mounts)
 	}
 	if !hasEnvVar(cr.lastCreate.EnvVars, "BOX_TRAIL_FILE") {
@@ -1417,7 +1417,7 @@ func TestRun_AuditorNonClaude_NoTrailMount(t *testing.T) {
 // Symlinks under ~/.claude/skills/ pointing OUTSIDE ~/.claude (the way users
 // hook in global skill repos like ~/.agents/skills/) need their targets
 // bind-mounted at the same host path inside the box, otherwise the symlink
-// (preserved by the parent ~/.claude:/root/.claude bind-mount) dangles.
+// (preserved by the parent same-path ~/.claude bind-mount) dangles.
 func TestRun_ClaudeAgent_BindMountsExternalSymlinkTargets(t *testing.T) {
 	cr := newCaptureRuntime()
 	cfg := defaultTestCfg()
@@ -1442,19 +1442,22 @@ func TestRun_ClaudeAgent_BindMountsExternalSymlinkTargets(t *testing.T) {
 		t.Fatalf("Run(claude): %v", err)
 	}
 
-	// Parent ~/.claude mount still points at the host dir (live sync).
+	// Parent ~/.claude mount still points at the host dir (live sync) and
+	// is now a same-path mount so absolute host paths embedded in plugin
+	// JSON resolve correctly.
+	wantClaudeDir := filepath.Join(l.Home, ".claude")
 	var claudeMount runspec.Mount
 	for _, m := range cr.lastCreate.Mounts {
-		if m.Target == "/root/.claude" {
+		if m.Target == wantClaudeDir {
 			claudeMount = m
 			break
 		}
 	}
 	if claudeMount.Source == "" {
-		t.Fatalf("/root/.claude mount missing")
+		t.Fatalf("~/.claude same-path mount missing (want target %q)", wantClaudeDir)
 	}
-	if claudeMount.Source != filepath.Join(l.Home, ".claude") {
-		t.Errorf("/root/.claude source = %q, want host ~/.claude (live mount)", claudeMount.Source)
+	if claudeMount.Source != wantClaudeDir {
+		t.Errorf("~/.claude mount source = %q, want %q (same-path)", claudeMount.Source, wantClaudeDir)
 	}
 
 	// Same-path mount of the resolved external skill target must be present

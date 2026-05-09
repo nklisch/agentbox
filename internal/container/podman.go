@@ -83,6 +83,9 @@ func (r *PodmanRuntime) Create(args runspec.PodmanCreateArgs) error {
 	for _, d := range args.DNS {
 		argv = append(argv, "--dns", d)
 	}
+	for _, s := range args.Sysctls {
+		argv = append(argv, "--sysctl", s.Key+"="+s.Value)
+	}
 	for _, e := range args.EnvNames {
 		argv = append(argv, "-e", e)
 	}

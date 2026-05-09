@@ -124,8 +124,9 @@ Before container creation, lifecycle calls `WriteShadowSettings` (`internal/life
    preserved; agentbox only appends.
 3. Writes the merged JSON to `<state>/claude-settings.json` (mode 0600).
 
-The merged file is bind-mounted **read-only** at `/root/.claude/settings.json` inside the
-box, layered on top of the `~/.claude:/root/.claude` directory mount. The host's actual
+The merged file is bind-mounted **read-only** at `$HOME/.claude/settings.json` inside the
+box, layered on top of the `~/.claude` same-path directory mount. (HOME inside the box
+mirrors the host's HOME — see SPEC mount semantics.) The host's actual
 `~/.claude/settings.json` is bit-identical before and after the run.
 
 ### 2. Trail file lifecycle

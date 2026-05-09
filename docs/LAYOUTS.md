@@ -109,8 +109,9 @@ Agent observability: agent pane (60% rows) + live tool-call trail pane (40% rows
 
 **Trail wiring** is automatic when `agent = "claude"` (the only supported agent in v1).
 agentbox writes a merged `claude-settings.json` (user settings + agentbox trail hooks) and
-shadow-mounts it read-only on top of `/root/.claude/settings.json` inside the box. The host's
-`~/.claude/settings.json` is never modified.
+shadow-mounts it read-only on top of `$HOME/.claude/settings.json` inside the box (HOME
+mirrors the host's HOME path — see SPEC mount semantics). The host's `~/.claude/settings.json`
+is never modified.
 
 For non-claude agents, the trail pane shows a placeholder message and stays alive.
 

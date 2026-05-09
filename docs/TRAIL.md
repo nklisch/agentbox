@@ -117,10 +117,11 @@ The runspec adds two conditional mounts when `TrailHostPath` is non-empty:
 | Mount | Direction | In-container path |
 | ----- | --------- | ----------------- |
 | `<state>/trail.jsonl` | read-write | `/etc/agentbox/trail.jsonl` |
-| `<state>/claude-settings.json` | read-only | `/root/.claude/settings.json` |
+| `<state>/claude-settings.json` | read-only | `$HOME/.claude/settings.json` |
 
-The shadow settings mount comes AFTER the `~/.claude:/root/.claude` directory mount in the
+The shadow settings mount comes AFTER the `~/.claude` same-path directory mount in the
 podman arguments, so the file-level mount layers on top of the directory mount correctly.
+HOME inside the box mirrors the host's HOME path (see SPEC mount semantics).
 
 agentbox also sets `BOX_TRAIL_FILE=/etc/agentbox/trail.jsonl` as a container env var so
 `box-trail` knows where to tail without arguments.

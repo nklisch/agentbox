@@ -99,6 +99,31 @@ func TestDefaultConfig_DefaultKitsContainsClaude(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_AllowlistCoversDefaultAgents(t *testing.T) {
+	cfg := config.DefaultConfig()
+	// Endpoints the three default agents (claude/codex/opencode) cannot
+	// function without when network.mode = "allowlist". If the list silently
+	// shrinks below this floor, agentbox's primary use case breaks.
+	required := []string{
+		"api.anthropic.com",        // Claude API — Claude Code can't issue completions without it
+		"mcp-proxy.anthropic.com",  // managed MCP servers
+		"api.openai.com",           // Codex API
+		"registry.npmjs.org",       // npm-installed plugins
+		"github.com",               // plugin sources, clones
+		"api.github.com",           // plugin marketplace metadata
+		"raw.githubusercontent.com", // plugin file fetches
+	}
+	have := make(map[string]bool, len(cfg.Network.Allowlist.Allow))
+	for _, h := range cfg.Network.Allowlist.Allow {
+		have[h] = true
+	}
+	for _, h := range required {
+		if !have[h] {
+			t.Errorf("DefaultConfig().Network.Allowlist.Allow missing %q (required for default agents)", h)
+		}
+	}
+}
+
 func TestDefaultConfig_ValidatesClean(t *testing.T) {
 	cfg := config.DefaultConfig()
 	if err := cfg.Validate(); err != nil {

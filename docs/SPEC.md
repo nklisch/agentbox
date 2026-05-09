@@ -59,8 +59,28 @@ extra_block      = []              # extra domains to NXDOMAIN
 extra_allow      = []              # extra domains to bypass blocking
 
 [network.allowlist]
-# Used when network.mode = "allowlist"
-allow = ["registry.npmjs.org", "pypi.org", "github.com", "api.anthropic.com"]
+# Used when network.mode = "allowlist". Default list keeps the three default
+# agents (claude, codex, opencode) functional: provider APIs + package registries +
+# GitHub endpoints that agent tooling reaches for. Trim or extend via `agentbox config set`.
+allow = [
+  # Anthropic / Claude Code
+  "api.anthropic.com",
+  "mcp-proxy.anthropic.com",
+  # OpenAI / Codex
+  "api.openai.com",
+  # Package registries
+  "registry.npmjs.org",
+  "pypi.org",
+  "files.pythonhosted.org",
+  "proxy.golang.org",
+  "sum.golang.org",
+  # GitHub (plugin sources, clones, release artifacts)
+  "github.com",
+  "api.github.com",
+  "raw.githubusercontent.com",
+  "objects.githubusercontent.com",
+  "codeload.github.com",
+]
 
 [mounts]
 gitconfig    = true                # mount ~/.gitconfig writable
@@ -69,7 +89,8 @@ extra        = []                  # ["~/.config/foo:/root/.config/foo:rw", ...]
 
 [mounts.agent_configs]
 # Per-agent config dir mounts. Writable by default.
-claude   = "~/.claude"             # → /root/.claude inside box
+# Mounted same-path: ~/.claude on host → ~/.claude inside box (HOME mirrors host).
+claude   = "~/.claude"
 codex    = "~/.codex"
 opencode = "~/.opencode"
 
@@ -136,18 +157,27 @@ in config is never mutated; the rewrite is ephemeral, applied in `lifecycle.Buil
 Same-path bind mount is non-negotiable: `-v $PWD:$PWD -w $PWD`. Error messages, lockfiles,
 absolute paths in tooling output all match the host.
 
+The same-path principle extends to **all home-directory mounts**. `~/.claude`,
+`~/.gitconfig`, `~/.ssh`, etc. are mounted at the host's HOME path inside the box, and
+`HOME` is set to mirror the host. Container still runs as uid 0 — `HOME` is just an env
+var. This matters because tools embed absolute host paths in their config files; for
+example, Claude Code's `installed_plugins.json` records `installPath` as an absolute host
+path like `/home/<user>/.claude/plugins/cache/<marketplace>/<plugin>/<version>`. Without
+same-path home mounts, those absolute paths don't resolve inside the box and plugins
+silently fail to load.
+
 | Mount                     | Mode | Source                        | Destination                  | Notes                                |
 | ------------------------- | ---- | ----------------------------- | ---------------------------- | ------------------------------------ |
 | Project                   | rw   | `$PWD`                        | `$PWD`                       | Always. Same path inside and out.    |
-| `~/.gitconfig`            | rw   | `~/.gitconfig`                | `/root/.gitconfig`           | If `mounts.gitconfig = true`.        |
-| `~/.ssh`                  | ro   | `~/.ssh`                      | `/root/.ssh`                 | RO only. Writable is rejected.       |
-| Agent config              | rw   | e.g. `~/.claude`              | e.g. `/root/.claude`         | Per `[mounts.agent_configs]`. For `claude`, lifecycle additionally scans `~/.claude` for symlinks pointing outside the directory (e.g. `~/.claude/skills/<name>` → `~/.agents/skills/<name>`) and bind-mounts each resolved target at its same host path inside the box, so the symlinks resolve. Live host↔box sync is preserved (it's still a bind-mount, not a copy). |
-| Claude sibling JSON       | rw   | `~/.claude.json`              | `/root/.claude.json`         | Auto-mounted only when `agent = claude`. Lifecycle touches the source file empty if missing so podman doesn't bind-mount a directory. |
-| Shell history             | rw   | session state `history` file  | `/root/.local/share/agentbox-history` | Persists across box recreation. |
+| `~/.gitconfig`            | rw   | `~/.gitconfig`                | `~/.gitconfig` (same-path)   | If `mounts.gitconfig = true`.        |
+| `~/.ssh`                  | ro   | `~/.ssh`                      | `~/.ssh` (same-path)         | RO only. Writable is rejected.       |
+| Agent config              | rw   | e.g. `~/.claude`              | e.g. `~/.claude` (same-path) | Per `[mounts.agent_configs]`. For `claude`, lifecycle additionally scans `~/.claude` for symlinks pointing outside the directory (e.g. `~/.claude/skills/<name>` → `~/.agents/skills/<name>`) and bind-mounts each resolved target at its same host path inside the box, so the symlinks resolve. Live host↔box sync is preserved (it's still a bind-mount, not a copy). |
+| Claude sibling JSON       | rw   | `~/.claude.json`              | `~/.claude.json` (same-path) | Auto-mounted only when `agent = claude`. Lifecycle touches the source file empty if missing so podman doesn't bind-mount a directory. |
+| Shell history             | rw   | session state `history` file  | `~/.local/share/agentbox-history` | Persists across box recreation. |
 | Layout                    | ro   | session state `layout.kdl`    | `/etc/agentbox/layout.kdl`   | Generated per session.               |
 | Effective config          | ro   | session state `effective-config.toml` | `/etc/agentbox/config.toml` | For in-box `box info`.       |
 | Trail file                | rw   | `<state>/trail.jsonl`         | `/etc/agentbox/trail.jsonl`  | Auditor layout + claude agent only. JSONL stream populated by Claude hooks. See docs/TRAIL.md. |
-| Claude settings shadow    | ro   | `<state>/claude-settings.json` | `/root/.claude/settings.json` | Auditor layout + claude agent only. Session-merged settings file (user's host settings + agentbox trail hooks). Bind-mounted on top of the existing `~/.claude` dir mount; the host's actual `settings.json` is never written. |
+| Claude settings shadow    | ro   | `<state>/claude-settings.json` | `~/.claude/settings.json`   | Auditor layout + claude agent only. Session-merged settings file (user's host settings + agentbox trail hooks). Bind-mounted on top of the existing `~/.claude` dir mount; the host's actual `settings.json` is never written. |
 
 `mounts.extra` accepts arbitrary entries in `<src>:<dst>:<mode>` form. No interpolation
 beyond `~`.
@@ -273,6 +303,8 @@ podman create \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --network "${NET_NAME}" \
+  --sysctl "net.ipv6.conf.all.disable_ipv6=1" \
+  --sysctl "net.ipv6.conf.default.disable_ipv6=1" \
   -e ANTHROPIC_API_KEY \
   -e OPENAI_API_KEY \
   "${KIT_IMAGE_TAG}" \
@@ -288,6 +320,14 @@ container start.
 - **`sleep infinity` + `exec`.** Lets multiple panes (agent, shell) all run inside the same
   container without competing for the foreground process.
 - **Drop caps + no-new-privileges.** Cheap defense in depth. The agent doesn't need them.
+- **IPv6 disabled inside the box.** The agentbox-managed Podman network is created v4-only
+  (`ipv6_enabled=false`), and the safe/allowlist iptables+ipset plumbing has no IPv6
+  equivalent. Without `disable_ipv6=1`, AAAA queries resolve via CoreDNS but TCP connect to
+  the resulting v6 address hangs (no v6 route from the box), producing mysterious plugin and
+  MCP failures. Disabling v6 in the box is also the right default for `open` mode, where the
+  default Podman bridge is typically v4-only in rootless setups. A future Phase 6 followup
+  can add full v6 support (v6 subnet on the network + ip6tables + ipset v6) and gate this
+  sysctl behind `network.ipv6 = false`.
 - **Env vars by name.** Host env is the source of truth. CLI never reads or logs values.
 - **Labels are the source of truth.** No state file required for `agentbox ls`. Loss of the
   state directory doesn't lose track of containers.

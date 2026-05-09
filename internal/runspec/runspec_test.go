@@ -442,17 +442,23 @@ func TestBuildPodmanCreateArgs_EnvVars(t *testing.T) {
 	}
 	// AGENTBOX_SAVED_DIR is the in-container mount target (not the host path),
 	// so box-save inside the container can resolve it to the bind-mounted dir.
-	if v, want := kvMap["AGENTBOX_SAVED_DIR"], "/root/.local/share/agentbox-saved"; v != want {
+	// Same-path: target mirrors the host home dir so absolute paths in
+	// embedded configs (claude plugins) resolve inside the box.
+	if v, want := kvMap["AGENTBOX_SAVED_DIR"], in.HomeDir+"/.local/share/agentbox-saved"; v != want {
 		t.Errorf("AGENTBOX_SAVED_DIR = %q, want %q", v, want)
+	}
+	// HOME mirrors the host home dir (same-path principle).
+	if v, want := kvMap["HOME"], in.HomeDir; v != want {
+		t.Errorf("HOME = %q, want %q", v, want)
 	}
 	// AGENTBOX_CREATED should be RFC3339
 	if v := kvMap["AGENTBOX_CREATED"]; v == "" {
 		t.Errorf("AGENTBOX_CREATED is empty")
 	}
-	// 8 base + IS_SANDBOX (claude-only workaround for the root refusal of
-	// --dangerously-skip-permissions).
-	if len(args.EnvVars) != 9 {
-		t.Errorf("expected 9 EnvVars (8 base + IS_SANDBOX for claude), got %d", len(args.EnvVars))
+	// 9 base (incl. HOME) + IS_SANDBOX (claude-only workaround for the root
+	// refusal of --dangerously-skip-permissions).
+	if len(args.EnvVars) != 10 {
+		t.Errorf("expected 10 EnvVars (9 base + IS_SANDBOX for claude), got %d", len(args.EnvVars))
 	}
 }
 
@@ -483,17 +489,18 @@ func TestBuildPodmanCreateArgs_SavedMount(t *testing.T) {
 	}
 
 	var found bool
+	wantTarget := in.HomeDir + "/.local/share/agentbox-saved"
 	for _, m := range args.Mounts {
 		if m.Source == in.StateDir+"/saved" &&
-			m.Target == "/root/.local/share/agentbox-saved" &&
+			m.Target == wantTarget &&
 			m.Mode == "rw" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected saved/ mount {%s/saved:/root/.local/share/agentbox-saved:rw}, not found in %+v",
-			in.StateDir, args.Mounts)
+		t.Errorf("expected saved/ mount {%s/saved:%s:rw}, not found in %+v",
+			in.StateDir, wantTarget, args.Mounts)
 	}
 }
 
@@ -590,6 +597,40 @@ func TestToShell_ContainsDNSLine(t *testing.T) {
 	}
 }
 
+func TestBuildPodmanCreateArgs_DisablesIPv6(t *testing.T) {
+	// Regression: agentbox-managed Podman networks are v4-only and
+	// safe/allowlist iptables+ipset has no v6 plumbing. AAAA queries resolve
+	// via CoreDNS but TCP connect to the v6 address hangs because the box
+	// has no v6 route. Without this sysctl, plugins/MCP servers that prefer
+	// IPv6 fail mysteriously. Box must always disable v6 internally.
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+
+	want := map[string]string{
+		"net.ipv6.conf.all.disable_ipv6":     "1",
+		"net.ipv6.conf.default.disable_ipv6": "1",
+	}
+	have := make(map[string]string, len(args.Sysctls))
+	for _, kv := range args.Sysctls {
+		have[kv.Key] = kv.Value
+	}
+	for k, v := range want {
+		if got := have[k]; got != v {
+			t.Errorf("Sysctls[%q] = %q, want %q (sysctls=%v)", k, got, v, args.Sysctls)
+		}
+	}
+
+	shell := args.ToShell("podman")
+	if !strings.Contains(shell, `--sysctl "net.ipv6.conf.all.disable_ipv6=1"`) {
+		t.Errorf("ToShell output missing --sysctl line for disable_ipv6:\n%s", shell)
+	}
+}
+
 func TestBuildPodmanCreateArgs_RoleLabel(t *testing.T) {
 	cfg := config.DefaultConfig()
 	in := defaultInput()
@@ -619,9 +660,9 @@ func TestBuildPodmanCreateArgs_EnvVars_CountUpdated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
 	}
-	// 8 base AGENTBOX_* + IS_SANDBOX for claude (v0.2.1).
-	if len(args.EnvVars) != 9 {
-		t.Errorf("expected 9 EnvVars, got %d: %+v", len(args.EnvVars), args.EnvVars)
+	// 9 base (8 AGENTBOX_* + HOME) + IS_SANDBOX for claude.
+	if len(args.EnvVars) != 10 {
+		t.Errorf("expected 10 EnvVars, got %d: %+v", len(args.EnvVars), args.EnvVars)
 	}
 }
 
@@ -674,14 +715,14 @@ func TestBuildPodmanCreateArgs_ClaudeJSONMount(t *testing.T) {
 	found := false
 	for _, m := range args.Mounts {
 		if m.Source == "/home/user/.claude.json" &&
-			m.Target == "/root/.claude.json" &&
+			m.Target == "/home/user/.claude.json" &&
 			m.Mode == "rw" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected ~/.claude.json mount for claude agent, mounts: %+v", args.Mounts)
+		t.Errorf("expected same-path ~/.claude.json mount for claude agent, mounts: %+v", args.Mounts)
 	}
 }
 
@@ -791,17 +832,18 @@ func TestBuildPodmanCreateArgs_ClaudeSettingsMount_WhenPathSet(t *testing.T) {
 		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
 	}
 	found := false
+	wantTarget := in.HomeDir + "/.claude/settings.json"
 	for _, m := range args.Mounts {
 		if m.Source == in.ClaudeSettingsHostPath &&
-			m.Target == "/root/.claude/settings.json" &&
+			m.Target == wantTarget &&
 			m.Mode == "ro" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected shadow settings mount {%s:/root/.claude/settings.json:ro}, not found in %+v",
-			in.ClaudeSettingsHostPath, args.Mounts)
+		t.Errorf("expected shadow settings mount {%s:%s:ro}, not found in %+v",
+			in.ClaudeSettingsHostPath, wantTarget, args.Mounts)
 	}
 }
 
@@ -814,8 +856,9 @@ func TestBuildPodmanCreateArgs_ClaudeSettingsMount_AbsentWhenNoPath(t *testing.T
 	if err != nil {
 		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
 	}
+	wantTarget := in.HomeDir + "/.claude/settings.json"
 	for _, m := range args.Mounts {
-		if m.Target == "/root/.claude/settings.json" {
+		if m.Target == wantTarget {
 			t.Errorf("shadow settings mount should be absent when ClaudeSettingsHostPath is empty, got: %+v", m)
 		}
 	}
@@ -906,11 +949,13 @@ func TestBuildPodmanCreateArgs_SettingsShadow_AfterClaudeDir(t *testing.T) {
 		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
 	}
 	claudeDirIdx, settingsShadowIdx := -1, -1
+	wantClaudeDir := in.HomeDir + "/.claude"
+	wantSettings := in.HomeDir + "/.claude/settings.json"
 	for i, m := range args.Mounts {
-		if m.Target == "/root/.claude" {
+		if m.Target == wantClaudeDir {
 			claudeDirIdx = i
 		}
-		if m.Target == "/root/.claude/settings.json" {
+		if m.Target == wantSettings {
 			settingsShadowIdx = i
 		}
 	}

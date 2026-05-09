@@ -112,11 +112,28 @@ func DefaultConfig() Config {
 				BlockDirectIP: true,
 			},
 			Allowlist: NetworkAllow{
+				// Baseline that lets the three default agents (claude, codex,
+				// opencode) actually function: provider APIs + the package
+				// registries / GitHub endpoints that agent tooling reaches for.
+				// Users can trim or extend via `agentbox config set`.
 				Allow: []string{
+					// Anthropic / Claude Code
+					"api.anthropic.com",
+					"mcp-proxy.anthropic.com",
+					// OpenAI / Codex
+					"api.openai.com",
+					// Package registries
 					"registry.npmjs.org",
 					"pypi.org",
+					"files.pythonhosted.org",
+					"proxy.golang.org",
+					"sum.golang.org",
+					// GitHub (plugin sources, clones, release artifacts)
 					"github.com",
-					"api.anthropic.com",
+					"api.github.com",
+					"raw.githubusercontent.com",
+					"objects.githubusercontent.com",
+					"codeload.github.com",
 				},
 			},
 		},

@@ -184,10 +184,10 @@ func TestLayoutAtCreate_AuditorLayout_PopulatedBeforeMount(t *testing.T) {
 	// Auditor + claude also wires the shadow settings + trail file. Both
 	// should be populated at Create() too — they were before this fix, but
 	// a future regression in createBox ordering would break them.
-	if shadow, ok := sr.atCreate["/root/.claude/settings.json"]; ok {
-		// Targets under /root/* aren't captured by snapshotRuntime (it filters
-		// to /etc/agentbox/*); this branch never fires today. Left as a hook
-		// for future expansion.
+	if shadow, ok := sr.atCreate[filepath.Join(l.Home, ".claude", "settings.json")]; ok {
+		// Targets under $HOME/.claude/* aren't captured by snapshotRuntime
+		// (it filters to /etc/agentbox/*); this branch never fires today.
+		// Left as a hook for future expansion.
 		_ = shadow
 	}
 }

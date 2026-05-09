@@ -95,7 +95,7 @@ two extra mounts and one env var to the container beyond the standard runtime sp
 | Addition | What it does |
 | -------- | ------------ |
 | `-v <state>/trail.jsonl:/etc/agentbox/trail.jsonl:rw` | JSONL event stream for hook output. |
-| `-v <state>/claude-settings.json:/root/.claude/settings.json:ro` | Shadow settings with agentbox trail hooks merged in. Layered on top of the `~/.claude` dir mount; host file untouched. |
+| `-v <state>/claude-settings.json:$HOME/.claude/settings.json:ro` | Shadow settings with agentbox trail hooks merged in. Layered on top of the `~/.claude` same-path dir mount; host file untouched. (HOME mirrors the host — see SPEC mount semantics.) |
 | `-e BOX_TRAIL_FILE=/etc/agentbox/trail.jsonl` | Tells `box-trail` where to tail. |
 
 See [docs/LAYOUTS.md](LAYOUTS.md) for the full layout reference and [docs/TRAIL.md](TRAIL.md)
@@ -407,9 +407,9 @@ kit_image    agentbox/8c3f1a2b4d5e
 network      safe (upstream: quad9, block_direct_ip: true)
 mounts
   /home/nathan/dev/myapp     rw  (project)
-  /root/.gitconfig            rw
-  /root/.ssh                  ro
-  /root/.claude               rw
+  /home/nathan/.gitconfig     rw
+  /home/nathan/.ssh           ro
+  /home/nathan/.claude        rw
 resources
   cpus     4
   memory   8g

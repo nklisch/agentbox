@@ -40,11 +40,14 @@ mount_path() {
 
 printf "mounts\n"
 mount_path "$(pwd 2>/dev/null)" "project"
-mount_path "/root/.gitconfig" ""
-mount_path "/root/.ssh" ""
-mount_path "/root/.claude" ""
-mount_path "/root/.local/share/agentbox-history" ""
-mount_path "/root/.local/share/agentbox-saved" ""
+# agentbox uses same-path mounts: home dir paths inside the box mirror
+# the host's HOME so absolute paths in config files (claude plugins,
+# gitconfig includeIf, etc.) resolve correctly. HOME is set by runspec.
+mount_path "${HOME}/.gitconfig" ""
+mount_path "${HOME}/.ssh" ""
+mount_path "${HOME}/.claude" ""
+mount_path "${HOME}/.local/share/agentbox-history" ""
+mount_path "${HOME}/.local/share/agentbox-saved" ""
 
 # ── Resources: cgroups v2 ──────────────────────────────────────────────────────
 printf "resources\n"
