@@ -135,14 +135,13 @@ verify       = "none"              # "none" only; "cosign" is reserved, rejected
 pull_timeout = "5m"                # Go duration; 0 = no timeout
 # refresh controls whether agentbox tracks the rolling `latest-<nickname>` tag
 # (republished daily by the kit-images cron) instead of the immutable
-# `<version>-<sha12>` tag. Useful for picking up upstream agent releases
-# (claude-code ships multiple times a day) without an agentbox release.
-#   ""        → off (default; reproducible)
-#   "off"     → same as ""
-#   "always"  → use rolling tag and bypass the cache age check
+# `<version>-<sha12>` tag. Pairs with the cron to pick up upstream agent
+# releases (claude-code ships multiple times a day) without an agentbox release.
+#   "off"     → never use the rolling tag (pin for reproducibility / CI)
+#   "always"  → use rolling tag, bypass the cache age check
 #   "<dur>"   → use rolling tag; re-pull when cache entry is older than <dur>
-#               (e.g. "24h", "168h" for weekly)
-refresh      = ""                  # off | always | Go duration
+#               (e.g. "24h" for daily, "168h" for weekly)
+refresh      = "24h"               # off | always | Go duration. Default tracks the daily cron.
 
 [agents.claude]
 kits = ["polyglot", "claude"]

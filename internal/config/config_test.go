@@ -220,6 +220,24 @@ func TestParseRefresh_NegativeRejected(t *testing.T) {
 	}
 }
 
+// Default config should track the daily kit-images cron (24h refresh) so
+// users on a stable agentbox version pick up upstream agent releases
+// without manual config tweaks. claude-code ships multiple times a day —
+// a stale default makes plugins/skills appear broken inside the box.
+func TestDefaultConfig_RefreshIs24h(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if got, want := cfg.Registry.Refresh, "24h"; got != want {
+		t.Errorf("DefaultConfig().Registry.Refresh = %q, want %q", got, want)
+	}
+	policy, err := config.ParseRefresh(cfg.Registry.Refresh)
+	if err != nil {
+		t.Fatalf("default refresh value did not parse: %v", err)
+	}
+	if !policy.Enabled || policy.Always || policy.MaxAge != 24*time.Hour {
+		t.Errorf("expected Enabled+24h policy, got %+v", policy)
+	}
+}
+
 func TestValidate_RegistryRefresh(t *testing.T) {
 	good := []string{"", "off", "always", "1h", "24h", "168h"}
 	for _, s := range good {

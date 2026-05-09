@@ -35,21 +35,20 @@ type Registry struct {
 	// Refresh controls whether agentbox tracks the rolling `latest-<nickname>`
 	// kit-image tag instead of the immutable `<version>-<sha12>` tag, and how
 	// often it re-pulls. Accepted values:
-	//   ""       — same as "off"
+	//   ""       — same as DefaultConfig (currently "24h")
 	//   "off"    — never use the rolling tag; always pull the version-pinned
-	//              ref (default; preserves reproducibility)
+	//              ref. Pin here for reproducibility (CI, locked envs).
 	//   "always" — use the rolling tag and bypass the cache age check; pull
-	//              whenever a build would otherwise hit the local cache
+	//              whenever a build would otherwise hit the local cache.
 	//   "<dur>"  — Go duration (e.g. "24h", "168h"); use the rolling tag and
-	//              re-pull when the local cache entry is older than <dur>
+	//              re-pull when the local cache entry is older than <dur>.
 	//
-	// Pairs with the daily kit-images cron (.github/workflows/kit-images.yml):
-	// the cron republishes `latest-<nickname>` against the latest released
-	// agentbox version each night, picking up new claude-code / claude-mode
-	// upstream releases. Without this knob, users on a stable agentbox
-	// version stay pinned to whatever upstream packages shipped with that
-	// release — fine for reproducibility, painful when claude-code releases
-	// daily.
+	// Default is "24h", matching the daily kit-images cron
+	// (.github/workflows/kit-images.yml) that republishes `latest-<nickname>`
+	// against the latest released agentbox version each night. The cron
+	// picks up new claude-code / claude-mode upstream releases (claude-code
+	// ships multiple times a day) so a default-config user sees at most 24h
+	// of drift from upstream without an agentbox release.
 	Refresh string `toml:"refresh" json:"refresh"`
 }
 
@@ -193,6 +192,13 @@ func DefaultConfig() Config {
 			Host:        "ghcr.io/nklisch/agentbox-kits",
 			Verify:      "none",
 			PullTimeout: "5m",
+			// Daily refresh on by default. claude-code releases multiple
+			// times a day and the kit-images cron republishes the rolling
+			// `latest-<nickname>` tag every night, so the user-facing default
+			// is "track upstream, with at most 24h drift." Users who need
+			// reproducibility (CI, locked environments, ABI-sensitive work)
+			// can pin to a specific agentbox release with refresh = "off".
+			Refresh: "24h",
 		},
 		Agents: map[string]Agent{
 			"claude": {
