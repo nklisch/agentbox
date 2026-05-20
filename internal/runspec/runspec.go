@@ -307,6 +307,13 @@ func BuildPodmanCreateArgs(cfg config.Config, in BuildInput) (PodmanCreateArgs, 
 			Mode:   "rw",
 		})
 	}
+	if in.Agent == "antigravity" && in.HomeDir != "" {
+		args.Mounts = append(args.Mounts, Mount{
+			Source: in.HomeDir + "/.antigravitycli",
+			Target: boxHome + "/.antigravitycli",
+			Mode:   "rw",
+		})
+	}
 	// Trail mount (auditor + claude only). Lifecycle sets in.TrailHostPath to
 	// the host JSONL path when trail is wired; we bind-mount it rw to the
 	// in-container path and set BOX_TRAIL_FILE so box-trail can find it.

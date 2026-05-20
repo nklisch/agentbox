@@ -769,6 +769,52 @@ func TestBuildPodmanCreateArgs_NonClaudeNoJSONMount(t *testing.T) {
 	}
 }
 
+func TestBuildPodmanCreateArgs_AntigravityCliMount(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.Agent = "antigravity"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	found := false
+	for _, m := range args.Mounts {
+		if m.Source == "/home/user/.antigravitycli" &&
+			m.Target == "/home/user/.antigravitycli" &&
+			m.Mode == "rw" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected same-path ~/.antigravitycli mount for antigravity agent, mounts: %+v", args.Mounts)
+	}
+}
+
+func TestBuildPodmanCreateArgs_AntigravityGeminiMount(t *testing.T) {
+	cfg := config.DefaultConfig()
+	in := defaultInput()
+	in.Agent = "antigravity"
+
+	args, err := runspec.BuildPodmanCreateArgs(cfg, in)
+	if err != nil {
+		t.Fatalf("BuildPodmanCreateArgs() error: %v", err)
+	}
+	found := false
+	for _, m := range args.Mounts {
+		if m.Source == "/home/user/.gemini" &&
+			m.Target == "/home/user/.gemini" &&
+			m.Mode == "rw" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected same-path ~/.gemini mount for antigravity agent, mounts: %+v", args.Mounts)
+	}
+}
+
 // ---- Group B: trail mount + BOX_TRAIL_FILE env var tests ----
 
 func TestBuildPodmanCreateArgs_TrailMount_WhenPathSet(t *testing.T) {

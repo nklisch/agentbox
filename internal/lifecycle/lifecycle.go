@@ -192,18 +192,18 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 		in.ClaudeSettingsHostPath = settingsPath
 	}
 
-	// Resolve external symlink targets inside ~/.claude (e.g. global
+	// Resolve external symlink targets inside the agent config directory (e.g. global
 	// skills/plugins symlinked in from outside). For each, we'll bind-mount
 	// the resolved target at its same host path inside the box so the
-	// symlink (preserved by the parent ~/.claude bind-mount) resolves to a
+	// symlink (preserved by the parent bind-mount) resolves to a
 	// real path. This keeps host↔box live sync — the parent dir is still
 	// bind-mounted rw, and the symlink targets are bind-mounted rw too.
-	if agent == "claude" && l.Home != "" {
+	if (agent == "claude" || agent == "antigravity") && l.Home != "" {
 		if cfgSrc, ok := l.Cfg.Mounts.AgentConfigs[agent]; ok && cfgSrc != "" {
-			claudeDir := paths.ExpandHome(cfgSrc, l.Home)
-			targets, err := CollectExternalSymlinkTargets(claudeDir)
+			agentDir := paths.ExpandHome(cfgSrc, l.Home)
+			targets, err := CollectExternalSymlinkTargets(agentDir)
 			if err != nil {
-				l.warn("warning: scan %s for external symlinks: %v", claudeDir, err)
+				l.warn("warning: scan %s for external symlinks: %v", agentDir, err)
 			}
 			in.ExtraSamePathMounts = append(in.ExtraSamePathMounts, targets...)
 		}
@@ -221,6 +221,10 @@ func (l *Lifecycle) createBox(projID, projAbs string, opts EnsureOpts, netInfo n
 	if in.Agent == "claude" && in.HomeDir != "" {
 		p := filepath.Join(in.HomeDir, ".claude.json")
 		_ = state.EnsureFile(p)
+	}
+	if in.Agent == "antigravity" && in.HomeDir != "" {
+		p := filepath.Join(in.HomeDir, ".antigravitycli")
+		_ = os.MkdirAll(p, 0755)
 	}
 
 	// Validate every bind-mount source exists on the host (exit 7 per CLI.md).

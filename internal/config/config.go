@@ -141,6 +141,9 @@ func DefaultConfig() Config {
 					"mcp-proxy.anthropic.com",
 					// OpenAI / Codex
 					"api.openai.com",
+					// Google Antigravity / Gemini
+					"antigravity.google",
+					"generativelanguage.googleapis.com",
 					// Package registries
 					"registry.npmjs.org",
 					"pypi.org",
@@ -160,13 +163,14 @@ func DefaultConfig() Config {
 			Gitconfig:   true,
 			SSHReadonly: true,
 			AgentConfigs: map[string]string{
-				"claude":   "~/.claude",
-				"codex":    "~/.codex",
-				"opencode": "~/.opencode",
+				"claude":      "~/.claude",
+				"codex":       "~/.codex",
+				"opencode":    "~/.opencode",
+				"antigravity": "~/.gemini",
 			},
 		},
 		Secrets: Secrets{
-			Passthrough: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
+			Passthrough: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"},
 		},
 		Resources: Resources{
 			CPUs:   4,
@@ -217,6 +221,11 @@ func DefaultConfig() Config {
 				// only; the TUI (bare `opencode`) has no equivalent flag. Use bare command for
 				// interactive in-box use. Non-interactive automation can use `opencode run --dangerously-skip-permissions`.
 				Cmd: []string{"opencode"},
+			},
+			"antigravity": {
+				Kits: []string{"polyglot", "antigravity"},
+				// YOLO flag verified 2026-05-19 against agy CLI.
+				Cmd: []string{"agy", "--dangerously-skip-permissions"},
 			},
 		},
 	}

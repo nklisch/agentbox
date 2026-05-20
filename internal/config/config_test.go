@@ -72,6 +72,17 @@ func TestDefaultConfig_AgentsHasCodex(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_AgentsHasAntigravity(t *testing.T) {
+	cfg := config.DefaultConfig()
+	agent, ok := cfg.Agents["antigravity"]
+	if !ok {
+		t.Fatal("DefaultConfig().Agents missing 'antigravity' entry")
+	}
+	if len(agent.Cmd) < 2 || agent.Cmd[0] != "agy" || agent.Cmd[1] != "--dangerously-skip-permissions" {
+		t.Errorf("DefaultConfig().Agents['antigravity'].Cmd = %v, want ['agy', '--dangerously-skip-permissions']", agent.Cmd)
+	}
+}
+
 func TestDefaultConfig_DefaultKitsIncludesContainers(t *testing.T) {
 	cfg := config.DefaultConfig()
 	found := false

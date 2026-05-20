@@ -1,0 +1,3 @@
+name        = "antigravity"
+description = "Google Antigravity CLI (agy flat native release)"
+depends_on  = ["base"]
